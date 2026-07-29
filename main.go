@@ -366,7 +366,7 @@ func padL(s string, n int) string {
 
 // ---------- bubbletea ----------
 
-const contentTop = 3 // header (2 lines) + margin
+const contentTop = 4 // top margin + header (2 lines) + margin
 
 func (m model) Init() tea.Cmd { return tea.Batch(animCmd(), dataCmd()) }
 
@@ -482,6 +482,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			m.jump()
+		default:
+			// alt+<num> jumps straight to the tmux window with that index and
+			// focuses it — same as clicking/Enter on it.
+			if s := msg.String(); len(s) == 5 && strings.HasPrefix(s, "alt+") &&
+				s[4] >= '0' && s[4] <= '9' {
+				n := int(s[4] - '0')
+				for idx, it := range m.rows {
+					if it.w == n {
+						m.sel = idx
+						m.jump()
+						break
+					}
+				}
+			}
 		}
 	}
 	return m, nil
@@ -491,6 +505,7 @@ func (m *model) jump() {
 	if s, ok := m.cur(); ok {
 		switchView(s)
 		swayFocusMain()
+		m.current = s.pane
 	}
 }
 
@@ -737,21 +752,26 @@ func (m model) header() string {
 	if tailW < 0 {
 		tailW = 0
 	}
-	tail := ""
+	// right side = the breakdown by state (number before glyph), so the top row
+	// actually tells you *what* the N sessions are. Zero categories are omitted.
 	u, p, i := m.counts()
-	if m.overflowNow() && tailW >= 12 { // number before glyph, red/amber/gray
-		tail = fg(cUrgent, fmt.Sprintf("%d●", u)) + " " +
-			fg(cAmber, fmt.Sprintf("%d⠹", p)) + " " +
-			fg(lipgloss.Color("#5a5a5a"), fmt.Sprintf("%d○", i))
-	} else if tailW >= 8 {
-		lc := lipgloss.Color("#3a4444")
-		if live {
-			lc = lipgloss.Color("#5a6a6a")
-		}
-		tail = fg(lc, "sessões")
+	var parts []string
+	if u > 0 {
+		parts = append(parts, fg(cUrgent, fmt.Sprintf("%d●", u)))
+	}
+	if p > 0 {
+		parts = append(parts, fg(cAmber, fmt.Sprintf("%d⠹", p)))
+	}
+	if i > 0 {
+		parts = append(parts, fg(lipgloss.Color("#5a5a5a"), fmt.Sprintf("%d○", i)))
+	}
+	tail := strings.Join(parts, " ")
+	tw := tailW - 1 // reserve a 1-col right margin
+	if tw < 0 {
+		tw = 0
 	}
 	top := lipgloss.JoinHorizontal(lipgloss.Top, mascot, count, " ",
-		lipgloss.NewStyle().Width(tailW).Align(lipgloss.Right).Render(tail))
+		lipgloss.NewStyle().Width(tw).Align(lipgloss.Right).Render(tail), " ")
 
 	var base string
 	if live {
@@ -771,7 +791,8 @@ func (m model) View() string {
 	th := themeFor(m.focused)
 
 	var b strings.Builder
-	b.WriteString(m.header() + "\n") // 2 lines, touches the top (no pad — a gap reads as a clip bug)
+	b.WriteString("\n")              // top margin (a full line — reads better than a thin one)
+	b.WriteString(m.header() + "\n") // header: 2 lines
 	b.WriteString("\n")              // margin below the header
 
 	if len(m.rows) == 0 {

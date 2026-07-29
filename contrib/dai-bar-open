@@ -4,7 +4,10 @@
 # focus daemon can tell it apart from real terminals.
 set -euo pipefail
 APP="${DAI_BAR_APP_ID:-dai-bar}"
-if swaymsg -t get_tree 2>/dev/null | grep -qE "\"app_id\": *\"${APP}\""; then
+# capture the tree first: piping into `grep -q` can SIGPIPE swaymsg, which with
+# `pipefail` would flakily read as "not found" and open a duplicate window.
+tree="$(swaymsg -t get_tree 2>/dev/null || true)"
+if grep -qE "\"app_id\": *\"${APP}\"" <<<"$tree"; then
   swaymsg "[app_id=\"${APP}\"] focus" >/dev/null 2>&1
   exit 0
 fi
@@ -14,4 +17,5 @@ for c in "$HOME/.dotfiles/bin/dai-bar" "$HOME/.local/bin/dai-bar" "$HOME/go/bin/
   [ -x "$c" ] && { BIN="$c"; break; }
 done
 [ -z "$BIN" ] && BIN="$(command -v dai-bar 2>/dev/null || echo dai-bar)"
+# pad=2x8: a few px of vertical breathing room (a sub-line top/bottom margin)
 exec foot --app-id="${APP}" -e "$BIN" "$@"
