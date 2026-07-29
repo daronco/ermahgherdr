@@ -8,4 +8,10 @@ if swaymsg -t get_tree 2>/dev/null | grep -qE "\"app_id\": *\"${APP}\""; then
   swaymsg "[app_id=\"${APP}\"] focus" >/dev/null 2>&1
   exit 0
 fi
-exec foot --app-id="${APP}" -e dai-bar "$@"
+# resolve an absolute binary path (foot inherits sway's env, not your shell PATH)
+BIN=""
+for c in "$HOME/.dotfiles/bin/dai-bar" "$HOME/.local/bin/dai-bar" "$HOME/go/bin/dai-bar"; do
+  [ -x "$c" ] && { BIN="$c"; break; }
+done
+[ -z "$BIN" ] && BIN="$(command -v dai-bar 2>/dev/null || echo dai-bar)"
+exec foot --app-id="${APP}" -e "$BIN" "$@"
