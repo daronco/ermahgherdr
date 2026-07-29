@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Track the live status of the `claude` session running in this tmux pane, so a
+# centralized view (status bar + tmux-claude-dash) can list EVERY session and
+# its state at a glance. The pane stays listed the whole time claude runs; only
+# the status changes.
+#
+# Session presence is marked by @claude (set/cleared by the zsh pre/precmd
+# hooks). This script maintains @claude_wait with the detailed state:
+#   perm     needs your authorization (permission prompt)  -> urgent, top
+#   waiting  responded / idle, waiting for your input       -> your turn
+#   working  processing (you just submitted, or booting)    -> no action
+#
+# Driven by Claude Code hooks (see ~/.claude/settings.json):
+#   stop   -> waiting   (Stop hook: finished a response)
+#   notify -> perm|waiting  (Notification hook: parses the message)
+#   submit -> working   (UserPromptSubmit: you sent input, now processing)
+#
+# Anchors on $TMUX_PANE so it targets the right pane regardless of focus.
+set -euo pipefail
+
+action="${1:-}"
+[[ -n "${TMUX_PANE:-}" ]] || exit 0
+p="$TMUX_PANE"
+
+new=""
+case "$action" in
+  stop)   new="waiting" ;;
+  submit) new="working" ;;
+  notify)
+    # Notification fires for permission prompts AND idle waits. Distinguish by
+    # the message text on stdin (raw JSON grep is enough and robust).
+    msg="$(cat 2>/dev/null || true)"
+    case "$msg" in
+      *permission*|*Permission*) new="perm" ;;
+      *)                         new="waiting" ;;
+    esac ;;
+  *) exit 0 ;;
+esac
+
+cur="$(tmux show -p -t "$p" -v @claude_wait 2>/dev/null || true)"
+[[ "$cur" == "$new" ]] && exit 0   # no change -> no repaint
+
+tmux set -p -t "$p" @claude_wait "$new" 2>/dev/null || true
+tmux set -p -t "$p" @claude_wait_since "$(date +%s)" 2>/dev/null || true
+tmux refresh-client -S 2>/dev/null || true

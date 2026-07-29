@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Sway helper: dim inactive windows, and remember the last real terminal.
+
+Two jobs, one focus-event subscription:
+  1. Fade every unfocused window a touch so it's obvious which one is active
+     (sway has no native inactive-dimming). Tune with SWAY_INACTIVE_OPACITY.
+  2. Record the con_id of the last focused window that ISN'T the claude dash,
+     to a state file. The dash's "jump" mode reads it to hand keyboard focus
+     back to your main terminal after teleporting the tmux view.
+
+Launch from sway:  exec $HOME/.dotfiles/bin/sway-dim-inactive
+Raw swaymsg (no i3ipc dependency).
+"""
+import json
+import os
+import subprocess
+
+DIM = float(os.environ.get("SWAY_INACTIVE_OPACITY", "1.0"))  # 1.0 = no dimming
+DASH_APP_ID = os.environ.get("DAI_BAR_APP_ID", "dai-bar")
+STATE = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "claude-last-term"
+)
+
+
+def swaymsg(*args):
+    try:
+        return subprocess.run(
+            ["swaymsg", *args], capture_output=True, text=True
+        ).stdout
+    except Exception:
+        return ""
+
+
+def opacity(con_id, val):
+    if con_id:
+        swaymsg(f"[con_id={con_id}]", "opacity", str(val))
+
+
+def leaves(node):
+    """Yield leaf containers (actual windows) from a get_tree node."""
+    kids = node.get("nodes", []) + node.get("floating_nodes", [])
+    if not kids and (node.get("app_id") or node.get("pid") or node.get("window")):
+        yield node
+    for k in kids:
+        yield from leaves(k)
+
+
+def record(con):
+    if not is_dash(con):     # never record a dash window as the focus target
+        try:
+            with open(STATE, "w") as f:
+                f.write(str(con["id"]))
+        except Exception:
+            pass
+
+
+def is_dash(con):
+    # matches claude-dash AND claude-dash-bar (any dash window), so none of them
+    # get recorded as the "last real terminal" that focus should return to.
+    return (con.get("app_id") or "").startswith("dai-bar")
+
+
+def dim_level(con):
+    # never dim the dash: it's a monitor, must stay readable while unfocused
+    return 1.0 if is_dash(con) else DIM
+
+
+DIMMING = DIM < 1.0  # dimming is opt-in; off by default (SWAY_INACTIVE_OPACITY=1.0)
+
+
+def main():
+    # initial pass: reset everything to full opacity (recovers any leftover dim),
+    # then dim the unfocused ones only if dimming is enabled. Record focused.
+    prev = None
+    try:
+        tree = json.loads(swaymsg("-t", "get_tree") or "{}")
+        for c in leaves(tree):
+            focused = c.get("focused")
+            opacity(c["id"], 1.0 if (focused or not DIMMING) else dim_level(c))
+            if focused:
+                prev = c
+                record(c)
+    except Exception:
+        pass
+
+    proc = subprocess.Popen(
+        ["swaymsg", "-m", "-t", "subscribe", '["window"]'],
+        stdout=subprocess.PIPE, text=True,
+    )
+    dec = json.JSONDecoder()
+    buf = ""
+    for line in proc.stdout:
+        buf += line
+        buf = buf.lstrip()
+        while buf:
+            try:
+                obj, idx = dec.raw_decode(buf)
+            except json.JSONDecodeError:
+                break
+            buf = buf[idx:].lstrip()
+            if obj.get("change") != "focus":
+                continue
+            con = obj.get("container") or {}
+            cid = con.get("id")
+            if not cid:
+                continue
+            if DIMMING:
+                opacity(cid, 1.0)
+                if prev and prev.get("id") != cid:
+                    opacity(prev["id"], dim_level(prev))
+            prev = con
+            record(con)   # always track last terminal (used by dash jump mode)
+
+
+if __name__ == "__main__":
+    main()

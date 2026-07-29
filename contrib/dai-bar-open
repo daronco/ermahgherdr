@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Open dai-bar in a foot window, or focus it if already open.
+# Tags the window with a stable app_id so sway can size/find it and the
+# focus daemon can tell it apart from real terminals.
+set -euo pipefail
+APP="${DAI_BAR_APP_ID:-dai-bar}"
+if swaymsg -t get_tree 2>/dev/null | grep -qE "\"app_id\": *\"${APP}\""; then
+  swaymsg "[app_id=\"${APP}\"] focus" >/dev/null 2>&1
+  exit 0
+fi
+exec foot --app-id="${APP}" -e dai-bar "$@"
