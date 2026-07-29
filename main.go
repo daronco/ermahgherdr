@@ -41,7 +41,22 @@ var (
 	metaUrg   = lipgloss.Color("#a97b79")
 	metaAmber = lipgloss.Color("#8a7550")
 	metaSel   = lipgloss.Color("#8a9a9a")
+	badgeFg   = lipgloss.Color("#16191a") // dark text on the (status-colored) badge
+	badgeIdle = lipgloss.Color("#93a3a3") // idle badge bg: light, like the item font
 )
+
+// badgeBgFor: the window-# badge takes the item's status color (red/amber), or a
+// light gray for idle — same language as the bullet.
+func badgeBgFor(st state) lipgloss.Color {
+	switch st {
+	case urgent:
+		return cUrgent
+	case proc:
+		return cAmber
+	default:
+		return badgeIdle
+	}
+}
 
 // theme = the parts that recede when the bar is unfocused (1c/1b).
 type theme struct {
@@ -488,7 +503,7 @@ func (m model) rowW() int {
 	return 27
 }
 func (m model) nameW() int {
-	if w := m.rowW() - 5 - 2; w > 8 {
+	if w := m.rowW() - 5 - 5; w > 8 { // 5-col gutter + 5-col right (badge/arrow+margin)
 		return w
 	}
 	return 8
@@ -502,17 +517,12 @@ func (m model) nameLines(it sess) []string {
 
 // hasMeta: does this item have a bottom (time/PERM) line? Urgent always does;
 // others only when there's a recorded age — no empty line eating space.
-func hasMeta(it sess) bool { return it.st == urgent || fmtAge(it.since) != "" }
-
 func (m model) itemHeight(it sess, comp bool) int {
 	if comp {
 		return 1
 	}
-	h := len(m.nameLines(it))
-	if hasMeta(it) {
-		h++
-	}
-	return h + 2 // + top & bottom pad
+	// names + the second line (tmux window number + time) + top & bottom pad
+	return len(m.nameLines(it)) + 1 + 2
 }
 
 func (m model) hitTest(y int) int {
@@ -641,16 +651,36 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		}
 		lines = append(lines, band+spine+c(rbg, " ", false)+glyph+c(nc, padR(nm, nw), bold))
 	}
-	if hasMeta(it) {
-		lines = append(lines, band+spine+c(rbg, "   ", false)+
-			c(metaColorOf(it, sel, th), padR(metaLine(it), nw), false))
-	}
+	// second line: the time (gutter cols 3-5 empty)
+	lines = append(lines, band+spine+c(rbg, "   ", false)+
+		c(metaColorOf(it, sel, th), padR(metaLine(it), nw), false))
 
-	mid := (len(lines) - 1) / 2 // vertical center of the content block
+	// right column (2 cells): the tmux window # as a dark badge on line 0, and
+	// the current-session arrow ▸ just below it (line 1) when applicable.
+	bstr := " " + strconv.Itoa(it.w) + " " // symmetric 1-space padding inside the badge
+	bw := utf8.RuneCountInString(bstr)
+	bbg := badgeBgFor(it.st)
+	if sel { // selected = cyan (the "you" color)
+		bbg = th.focus
+	}
+	badge := lipgloss.NewStyle().Background(bbg).Foreground(badgeFg).Render(bstr)
+	leadN := 4 - bw // right-align badge; +1 margin -> 5-col slot
+	if leadN < 0 {
+		leadN = 0
+	}
+	lead := c(rbg, strings.Repeat(" ", leadN), false)
+	badgeCell := lead + badge + c(rbg, " ", false)
+	// arrows span the badge width so they read as one aligned block under it
+	arrowCell := lead + c(th.focus, strings.Repeat("➤", bw), false) + c(rbg, " ", false)
 	for i := range lines {
-		ac := c(rbg, "  ", false)
-		if i == mid && it.pane == m.current {
-			ac = c(th.focus, "➤", false) + c(rbg, " ", false)
+		var ac string
+		switch {
+		case i == 0:
+			ac = badgeCell
+		case i == 1 && it.pane == m.current:
+			ac = arrowCell
+		default:
+			ac = c(rbg, "     ", false)
 		}
 		lines[i] += ac
 	}
