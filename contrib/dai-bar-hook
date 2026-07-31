@@ -43,3 +43,21 @@ cur="$(tmux show -p -t "$p" -v @claude_wait 2>/dev/null || true)"
 tmux set -p -t "$p" @claude_wait "$new" 2>/dev/null || true
 tmux set -p -t "$p" @claude_wait_since "$(date +%s)" 2>/dev/null || true
 tmux refresh-client -S 2>/dev/null || true
+
+# Audible ping on the transitions that want your attention (guarded above, so
+# only on the actual state change), async so it never blocks the hook:
+#   perm    -> needs your authorization  (urgent)
+#   waiting -> finished, your turn       (softer, "maybe continue")
+# Both gated by the tmux global @dai_bar_sound, toggled from the dai-bar UI
+# (🔔/🔕). Override the files with DAI_BAR_SOUND_PERM / DAI_BAR_SOUND_DONE.
+snd=""
+case "$new" in
+  perm)    snd="${DAI_BAR_SOUND_PERM:-/usr/share/sounds/freedesktop/stereo/complete.oga}" ;;
+  waiting) snd="${DAI_BAR_SOUND_DONE:-/usr/share/sounds/freedesktop/stereo/bell.oga}" ;;
+esac
+if [[ -n "$snd" ]]; then
+  gate="$(tmux show -gv @dai_bar_sound 2>/dev/null || true)"
+  if [[ "$gate" == "on" && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then
+    paplay "$snd" >/dev/null 2>&1 &
+  fi
+fi

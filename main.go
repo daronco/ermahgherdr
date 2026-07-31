@@ -128,6 +128,7 @@ type model struct {
 	pulse   map[string]int
 	wasUrg  map[string]bool
 	comp    bool // compact (geometry-based, with 1-item hysteresis)
+	sound   bool // audible alerts on (mirrors tmux global @dai_bar_sound)
 }
 
 type animMsg time.Time
@@ -370,10 +371,24 @@ const contentTop = 4 // top margin + header (2 lines) + margin
 
 func (m model) Init() tea.Cmd { return tea.Batch(animCmd(), dataCmd()) }
 
+// soundOn: is the audible alert enabled? (shared with the hook via a tmux global)
+func soundOn() bool { return strings.TrimSpace(tmuxOut("show", "-gv", "@dai_bar_sound")) == "on" }
+
+// toggleSound flips the shared flag; the hook reads it on the next perm/waiting.
+func (m *model) toggleSound() {
+	m.sound = !m.sound
+	v := "off"
+	if m.sound {
+		v = "on"
+	}
+	run("tmux", "set", "-g", "@dai_bar_sound", v)
+}
+
 func (m *model) refresh() {
 	m.rows = gather()
 	m.focused = detectFocus()
 	m.current = detectCurrent()
+	m.sound = soundOn()
 	if m.pulse == nil {
 		m.pulse = map[string]int{}
 	}
@@ -453,7 +468,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if idx := m.hitTest(msg.Y); idx >= 0 {
+			if msg.Y == 1 && msg.X >= m.rowW()-5 {
+				m.toggleSound() // sound badge lives at the header's right edge
+			} else if idx := m.hitTest(msg.Y); idx >= 0 {
 				m.sel = idx
 				m.jump()
 			}
@@ -466,6 +483,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r", "R":
 			m.reload = true
 			return m, tea.Quit
+		case "s", "S":
+			m.toggleSound()
 		case "up", "k":
 			if m.sel > 0 {
 				m.sel--
@@ -748,12 +767,9 @@ func (m model) header() string {
 	}
 	count := lipgloss.NewStyle().Foreground(countCol).Render(strconv.Itoa(len(m.rows)))
 
-	tailW := rw - lipgloss.Width(mascot) - lipgloss.Width(count) - 1
-	if tailW < 0 {
-		tailW = 0
-	}
-	// right side = the breakdown by state (number before glyph), so the top row
-	// actually tells you *what* the N sessions are. Zero categories are omitted.
+	// left cluster: the breakdown by state (number before glyph) sits right next
+	// to the logo + total, split by a faint │ — so the top row tells you *what*
+	// the N sessions are, at a glance. Zero categories are omitted.
 	u, p, i := m.counts()
 	var parts []string
 	if u > 0 {
@@ -765,13 +781,23 @@ func (m model) header() string {
 	if i > 0 {
 		parts = append(parts, fg(lipgloss.Color("#5a5a5a"), fmt.Sprintf("%d○", i)))
 	}
-	tail := strings.Join(parts, " ")
-	tw := tailW - 1 // reserve a 1-col right margin
-	if tw < 0 {
-		tw = 0
+	left := mascot + count
+	if len(parts) > 0 {
+		left += fg(lipgloss.Color("#3f4646"), " │ ") + strings.Join(parts, " ")
 	}
-	top := lipgloss.JoinHorizontal(lipgloss.Top, mascot, count, " ",
-		lipgloss.NewStyle().Width(tw).Align(lipgloss.Right).Render(tail), " ")
+	// rightmost element: the sound toggle, rendered like the window-# badges
+	// (glyph on a filled chip) so it's easy to see — cyan when on; when off, an
+	// opaque red chip with the note struck through (clearly "muted").
+	sBg, sFg, sGlyph := lipgloss.Color("#6e3634"), lipgloss.Color("#eccbca"), " ✕ "
+	if m.sound {
+		sBg, sFg, sGlyph = lipgloss.Color("#2dccd3"), badgeFg, " ♫ "
+	}
+	soundBadge := lipgloss.NewStyle().Background(sBg).Foreground(sFg).Render(sGlyph)
+	gap := rw - lipgloss.Width(left) - lipgloss.Width(soundBadge) - 1
+	if gap < 1 {
+		gap = 1
+	}
+	top := left + strings.Repeat(" ", gap) + soundBadge + " "
 
 	var base string
 	if live {
