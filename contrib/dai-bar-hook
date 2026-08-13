@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Track the live status of the `claude` session running in this tmux pane, so a
-# centralized view (status bar + tmux-claude-dash) can list EVERY session and
-# its state at a glance. The pane stays listed the whole time claude runs; only
-# the status changes.
+# Track the live status of the `claude` session running in this tmux pane, so
+# dai-bar can list EVERY session and its state at a glance. The pane stays
+# listed the whole time claude runs; only the status changes.
 #
-# Session presence is marked by @claude (set/cleared by the zsh pre/precmd
-# hooks). This script maintains @claude_wait with the detailed state:
+# dai-bar finds the panes on its own (pane_current_command == claude); this
+# script only maintains the pane option @dai_bar_wait with the detailed state:
 #   perm     needs your authorization (permission prompt)  -> urgent, top
 #   waiting  responded / idle, waiting for your input       -> your turn
 #   working  processing (you just submitted, or booting)    -> no action
@@ -37,11 +36,11 @@ case "$action" in
   *) exit 0 ;;
 esac
 
-cur="$(tmux show -p -t "$p" -v @claude_wait 2>/dev/null || true)"
+cur="$(tmux show -p -t "$p" -v @dai_bar_wait 2>/dev/null || true)"
 [[ "$cur" == "$new" ]] && exit 0   # no change -> no repaint
 
-tmux set -p -t "$p" @claude_wait "$new" 2>/dev/null || true
-tmux set -p -t "$p" @claude_wait_since "$(date +%s)" 2>/dev/null || true
+tmux set -p -t "$p" @dai_bar_wait "$new" 2>/dev/null || true
+tmux set -p -t "$p" @dai_bar_wait_since "$(date +%s)" 2>/dev/null || true
 tmux refresh-client -S 2>/dev/null || true
 
 # Audible ping on the transitions that want your attention (guarded above, so

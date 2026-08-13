@@ -11,11 +11,13 @@ if grep -qE "\"app_id\": *\"${APP}\"" <<<"$tree"; then
   swaymsg "[app_id=\"${APP}\"] focus" >/dev/null 2>&1
   exit 0
 fi
-# resolve an absolute binary path (foot inherits sway's env, not your shell PATH)
+# resolve an absolute binary path (the terminal inherits sway's env, not your
+# shell PATH), preferring where `go install` drops it.
 BIN=""
-for c in "$HOME/.dotfiles/bin/dai-bar" "$HOME/.local/bin/dai-bar" "$HOME/go/bin/dai-bar"; do
+for c in "$HOME/go/bin/dai-bar" "$HOME/.local/bin/dai-bar" "$HOME/.dotfiles/bin/dai-bar"; do
   [ -x "$c" ] && { BIN="$c"; break; }
 done
 [ -z "$BIN" ] && BIN="$(command -v dai-bar 2>/dev/null || echo dai-bar)"
-# pad=2x8: a few px of vertical breathing room (a sub-line top/bottom margin)
-exec foot --app-id="${APP}" -e "$BIN" "$@"
+# foot by default. Another terminal: set DAI_BAR_TERMINAL — but check how it
+# spells the window tag first (alacritty/kitty use --class, not --app-id).
+exec "${DAI_BAR_TERMINAL:-foot}" --app-id="${APP}" -e "$BIN" "$@"

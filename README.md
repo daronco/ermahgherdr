@@ -29,7 +29,11 @@ bottom raises its hands.
 - **tmux** — sessions are discovered as panes whose foreground command is `claude`.
 - **sway** *(optional)* — powers the focus underline and the "jump keyboard focus
   to the target terminal" behavior. Without it the bar still lists and previews.
-- **Go 1.21+** to build.
+- **Go 1.24+** to build.
+
+The bar itself needs only tmux. The helpers in [`contrib/`](contrib) add sway
+(and, for `dai-bar-open`, the [foot](https://codeberg.org/dnkl/foot) terminal) —
+see [contrib/README.md](contrib/README.md).
 
 ## Install
 
@@ -43,7 +47,7 @@ opens-or-focuses it in a tagged sway window is in
 
 ## Status hook (recommended)
 
-dai-bar reads the live state from a tmux pane option `@claude_wait` that a Claude
+dai-bar reads the live state from a tmux pane option `@dai_bar_wait` that a Claude
 Code hook keeps updated. Point Claude Code's hooks at
 [`contrib/dai-bar-hook`](contrib/dai-bar-hook) — in `~/.claude/settings.json`:
 

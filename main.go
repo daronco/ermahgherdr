@@ -4,11 +4,13 @@
 // top, time below — with a fixed 5-col meter repeated on both lines and the
 // right edge reserved for a single glyph: the ▸ arrow of the CURRENT session.
 //
-// Color semantics (Leo's inversion of the design default):
+// Color semantics — inverted from the usual convention: color means urgency,
+// nothing else, so the many idle sessions stay quiet and the one that needs you
+// is the only loud thing on screen.
 //
-//	red   = needs you (permission)     · spine + ● + tint + bold + arrival pulse
-//	amber = PROCESSING (moving)         · spine + braille spinner
-//	gray  = idle / parada (the many)    · no spine + static ○
+//	red   = needs you (permission)  · spine + ● + tint + bold + arrival pulse
+//	amber = processing (moving)     · spine + braille spinner
+//	gray  = idle (the many)         · no spine + static ○
 //
 // cyan means only "you": selection band ▐, current-session arrow ▸, focused count.
 package main
@@ -156,7 +158,7 @@ func statusOf(wait, title string) state {
 		return urgent
 	}
 	if wait == "waiting" || strings.ContainsRune("✳✶✷✸✹✺✻✽❋⏺*", r) {
-		return idle // responded / waiting on you = parada
+		return idle // responded / waiting on you = stopped
 	}
 	return proc
 }
@@ -183,7 +185,7 @@ func atoi64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 func gather() []sess {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
-		"#{@claude_wait}", "#{@claude_wait_since}", "#{pane_current_path}", "#{pane_title}",
+		"#{@dai_bar_wait}", "#{@dai_bar_wait_since}", "#{pane_current_path}", "#{pane_title}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var rows []sess
@@ -231,7 +233,7 @@ func swayFocusMain() {
 	if rt == "" {
 		rt = "/tmp"
 	}
-	if b, err := os.ReadFile(filepath.Join(rt, "claude-last-term")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(rt, "dai-bar-last-term")); err == nil {
 		if cid := strings.TrimSpace(string(b)); cid != "" {
 			run("swaymsg", fmt.Sprintf("[con_id=%s] focus", cid))
 		}
@@ -413,7 +415,7 @@ func (m *model) refresh() {
 		m.sel = max(0, len(m.rows)-1)
 	}
 	// selection follows the actually-current pane, so switching panes in tmux
-	// moves the cursor too — coming back to the dash it never "jumps" to a stale item.
+	// moves the cursor too — coming back to the bar it never "jumps" to a stale item.
 	if m.current != "" {
 		for i, r := range m.rows {
 			if r.pane == m.current {
@@ -822,8 +824,8 @@ func (m model) View() string {
 	b.WriteString("\n")              // margin below the header
 
 	if len(m.rows) == 0 {
-		b.WriteString(" " + fg(th.meta, "nenhuma sessão") + "\n")
-		b.WriteString(" " + fg(th.meta, "claude aberta") + "\n")
+		b.WriteString(" " + fg(th.meta, "no claude") + "\n")
+		b.WriteString(" " + fg(th.meta, "sessions") + "\n")
 		return m.finish(th, b.String())
 	}
 
@@ -831,7 +833,7 @@ func (m model) View() string {
 		b.WriteString(m.renderItem(it, idx, th) + "\n")
 	}
 	b.WriteString("\n") // margin above the footer
-	b.WriteString(" " + fg(th.calm, "↑↓ mover  ⏎ ir"))
+	b.WriteString(" " + fg(th.calm, "↑↓ move  ⏎ go"))
 	return m.finish(th, b.String())
 }
 

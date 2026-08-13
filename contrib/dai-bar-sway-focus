@@ -4,11 +4,11 @@
 Two jobs, one focus-event subscription:
   1. Fade every unfocused window a touch so it's obvious which one is active
      (sway has no native inactive-dimming). Tune with SWAY_INACTIVE_OPACITY.
-  2. Record the con_id of the last focused window that ISN'T the claude dash,
-     to a state file. The dash's "jump" mode reads it to hand keyboard focus
-     back to your main terminal after teleporting the tmux view.
+  2. Record the con_id of the last focused window that ISN'T dai-bar, to a state
+     file. dai-bar's "jump" mode reads it to hand keyboard focus back to your
+     main terminal after teleporting the tmux view.
 
-Launch from sway:  exec $HOME/.dotfiles/bin/sway-dim-inactive
+Launch from sway:  exec dai-bar-sway-focus
 Raw swaymsg (no i3ipc dependency).
 """
 import json
@@ -16,9 +16,9 @@ import os
 import subprocess
 
 DIM = float(os.environ.get("SWAY_INACTIVE_OPACITY", "1.0"))  # 1.0 = no dimming
-DASH_APP_ID = os.environ.get("DAI_BAR_APP_ID", "dai-bar")
+BAR_APP_ID = os.environ.get("DAI_BAR_APP_ID", "dai-bar")
 STATE = os.path.join(
-    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "claude-last-term"
+    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "dai-bar-last-term"
 )
 
 
@@ -46,7 +46,7 @@ def leaves(node):
 
 
 def record(con):
-    if not is_dash(con):     # never record a dash window as the focus target
+    if not is_bar(con):      # never record a dai-bar window as the focus target
         try:
             with open(STATE, "w") as f:
                 f.write(str(con["id"]))
@@ -54,15 +54,15 @@ def record(con):
             pass
 
 
-def is_dash(con):
-    # matches claude-dash AND claude-dash-bar (any dash window), so none of them
-    # get recorded as the "last real terminal" that focus should return to.
-    return (con.get("app_id") or "").startswith("dai-bar")
+def is_bar(con):
+    # prefix match, so any dai-bar window (e.g. a second, tagged one) is excluded
+    # from being recorded as the "last real terminal" that focus returns to.
+    return (con.get("app_id") or "").startswith(BAR_APP_ID)
 
 
 def dim_level(con):
-    # never dim the dash: it's a monitor, must stay readable while unfocused
-    return 1.0 if is_dash(con) else DIM
+    # never dim dai-bar: it's a monitor, must stay readable while unfocused
+    return 1.0 if is_bar(con) else DIM
 
 
 DIMMING = DIM < 1.0  # dimming is opt-in; off by default (SWAY_INACTIVE_OPACITY=1.0)
@@ -109,7 +109,7 @@ def main():
                 if prev and prev.get("id") != cid:
                     opacity(prev["id"], dim_level(prev))
             prev = con
-            record(con)   # always track last terminal (used by dash jump mode)
+            record(con)   # always track last terminal (used by dai-bar jump mode)
 
 
 if __name__ == "__main__":
