@@ -901,7 +901,9 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 	gg, gc := m.glyphRune(it, th)
 
 	if m.comp { // 1 line: gutter + name + time(right) + arrow
-		nwC := max(4, m.rowW()-5-4-1)
+		// gutter 5 + a space + the 4-cell age + the arrow: 11, not 10. Being one
+		// over made lipgloss wrap the row onto a second line.
+		nwC := max(4, m.rowW()-5-1-4-1)
 		nm := midTruncate(strings.ToLower(it.name), nwC)
 		age := padL(fmtAge(it.since), 4)
 		arrow := c(rbg, " ", false)

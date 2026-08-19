@@ -2,7 +2,10 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // The state table is where the bug lived: a mark alone could pin a session on
@@ -100,6 +103,29 @@ func TestReadScreenCaptures(t *testing.T) {
 		}
 		if got := readScreen(string(b)); got != c.want {
 			t.Errorf("%s: readScreen = %+v, want %+v", c.file, got, c.want)
+		}
+	}
+}
+
+// Every rendered row must fit rowW: one cell over and lipgloss wraps it onto a
+// second line, which shifts everything below it and breaks hitTest.
+func TestRowsFitWidth(t *testing.T) {
+	rows := []sess{
+		{pane: "%1", name: "dados financeiros no bigquery", st: idle, w: 6, since: 1},
+		{pane: "%2", name: "abel", st: urgent, w: 12, since: 1},
+	}
+	th := themeFor(false)
+	for _, comp := range []bool{false, true} {
+		for _, w := range []int{27, 40, 14} {
+			m := model{w: w, h: 40, comp: comp, rows: rows, current: "%1"}
+			for idx, it := range m.rows {
+				for _, ln := range strings.Split(m.renderItem(it, idx, th), "\n") {
+					if got := lipgloss.Width(ln); got > m.rowW() {
+						t.Errorf("comp=%v w=%d item %d: row is %d wide, rowW is %d",
+							comp, w, idx, got, m.rowW())
+					}
+				}
+			}
 		}
 	}
 }
