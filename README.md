@@ -17,8 +17,13 @@ session your terminal is currently showing.
 Status by color (**color means urgency, nothing else**):
 
 - 🔴 **red** — needs you: a permission prompt is waiting.
+- 🟢 **green** — unread: it finished and you haven't looked at the answer yet.
 - 🟡 **amber** — processing: the agent is working (animated spinner).
-- ⚪ **gray** — idle: responded / doing nothing (most sessions, most of the time).
+- ⚪ **gray** — idle: read / doing nothing (most sessions, most of the time).
+
+Green clears the moment you actually see the pane — you jump to it from the bar,
+or you focus the terminal with tmux showing it. Reading it in the bar's preview
+(arrows) doesn't count; that's browsing, not reading.
 
 Cyan means only *you*: the selection band, the current-session arrow, and the
 focused-header underline. When the bar has keyboard focus the little 👾 at the
@@ -61,14 +66,29 @@ Code hook keeps updated. Point Claude Code's hooks at
 }
 ```
 
-Without the hook, dai-bar still infers *processing* vs *idle* from the terminal
-title glyph — but it can't know about permission prompts, so the 🔴 state won't show.
+The hook only ever sets `perm`, `working` and `done`; `waiting` (= read) is
+written by the bar itself, when you look at the pane.
+
+None of those marks is trusted on its own. A mark is set by one hook and cleared
+by another, so a turn that ends without a Stop hook — you esc out of a prompt,
+you decline a question — used to strand the session on red for good. The bar
+reads the bottom of each pane every poll and lets the screen decide whether the
+agent is actually working and whether a prompt is actually up. What the hook
+adds on top is the part the screen can't show: that a stopped session is
+*unread* rather than merely idle.
+
+So without the hook the bar still gets 🟡 and ⚪ right — it just can't tell 🔴
+and 🟢 apart from a session sitting quietly.
 
 ## sway integration (optional)
 
 - **Focus return** — run [`contrib/dai-bar-sway-focus`](contrib/dai-bar-sway-focus)
   from your sway config (`exec_always …`). It records the last real terminal so
   pressing Enter in the bar hands keyboard focus back to it.
+- **Unread clearing** — telling "you are looking at the session" from "it merely
+  is the active tmux pane while you read your mail" means knowing which window
+  has the keyboard, which is a sway question. Without sway, 🟢 clears only when
+  you jump from the bar.
 - **Bindings** — for example:
 
   ```

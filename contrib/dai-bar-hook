@@ -6,12 +6,13 @@
 # dai-bar finds the panes on its own (pane_current_command == claude); this
 # script only maintains the pane option @dai_bar_wait with the detailed state:
 #   perm     needs your authorization (permission prompt)  -> urgent, top
-#   waiting  responded / idle, waiting for your input       -> your turn
+#   done     finished, and you have not looked yet         -> your turn
 #   working  processing (you just submitted, or booting)    -> no action
+#   waiting  seen — written by dai-bar when you look at the pane, never here
 #
 # Driven by Claude Code hooks (see ~/.claude/settings.json):
-#   stop   -> waiting   (Stop hook: finished a response)
-#   notify -> perm|waiting  (Notification hook: parses the message)
+#   stop   -> done      (Stop hook: finished a response)
+#   notify -> perm|done (Notification hook: parses the message)
 #   submit -> working   (UserPromptSubmit: you sent input, now processing)
 #
 # Anchors on $TMUX_PANE so it targets the right pane regardless of focus.
@@ -23,7 +24,7 @@ p="$TMUX_PANE"
 
 new=""
 case "$action" in
-  stop)   new="waiting" ;;
+  stop)   new="done" ;;
   submit) new="working" ;;
   notify)
     # Notification fires for permission prompts AND idle waits. Distinguish by
@@ -31,7 +32,7 @@ case "$action" in
     msg="$(cat 2>/dev/null || true)"
     case "$msg" in
       *permission*|*Permission*) new="perm" ;;
-      *)                         new="waiting" ;;
+      *)                         new="done" ;;
     esac ;;
   *) exit 0 ;;
 esac
@@ -45,14 +46,14 @@ tmux refresh-client -S 2>/dev/null || true
 
 # Audible ping on the transitions that want your attention (guarded above, so
 # only on the actual state change), async so it never blocks the hook:
-#   perm    -> needs your authorization  (urgent)
-#   waiting -> finished, your turn       (softer, "maybe continue")
+#   perm -> needs your authorization  (urgent)
+#   done -> finished, your turn       (softer, "maybe continue")
 # Both gated by the tmux global @dai_bar_sound, toggled from the dai-bar UI
 # (🔔/🔕). Override the files with DAI_BAR_SOUND_PERM / DAI_BAR_SOUND_DONE.
 snd=""
 case "$new" in
-  perm)    snd="${DAI_BAR_SOUND_PERM:-/usr/share/sounds/freedesktop/stereo/complete.oga}" ;;
-  waiting) snd="${DAI_BAR_SOUND_DONE:-/usr/share/sounds/freedesktop/stereo/bell.oga}" ;;
+  perm) snd="${DAI_BAR_SOUND_PERM:-/usr/share/sounds/freedesktop/stereo/complete.oga}" ;;
+  done) snd="${DAI_BAR_SOUND_DONE:-/usr/share/sounds/freedesktop/stereo/bell.oga}" ;;
 esac
 if [[ -n "$snd" ]]; then
   gate="$(tmux show -gv @dai_bar_sound 2>/dev/null || true)"
