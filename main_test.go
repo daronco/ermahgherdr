@@ -169,3 +169,19 @@ func TestRowsFitWidth(t *testing.T) {
 		}
 	}
 }
+
+// The focus rule spans the full width — it used to light 40% and stop, which
+// read as a progress bar. Width is what the layout depends on.
+func TestFocusRuleWidth(t *testing.T) {
+	for _, w := range []int{4, 12, 25, 60} {
+		if got := lipgloss.Width(focusRule(w)); got != w {
+			t.Errorf("focusRule(%d) is %d wide", w, got)
+		}
+	}
+	if lerp(0x2dccd3, 0x24494b, 0, 10) != "#2dccd3" {
+		t.Errorf("lerp should start on the bright end, got %v", lerp(0x2dccd3, 0x24494b, 0, 10))
+	}
+	if lerp(0x2dccd3, 0x24494b, 10, 10) != "#24494b" {
+		t.Errorf("lerp should land on the dim end, got %v", lerp(0x2dccd3, 0x24494b, 10, 10))
+	}
+}

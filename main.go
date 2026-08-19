@@ -1010,6 +1010,31 @@ func (m model) rule() string {
 	return " " + fg(lipgloss.Color("#2a3030"), strings.Repeat("─", m.rowW()-2))
 }
 
+// focusRule: the header's rule while the bar holds the keyboard — heavy, cyan,
+// brightest at the left and fading out across the full width. Lighting a fixed
+// 40% and stopping dead read as a progress bar stuck at 40%: an edge that sharp
+// promises a meaning, and there was none behind it.
+func focusRule(w int) string {
+	const from, to = 0x2dccd3, 0x24494b
+	var b strings.Builder
+	for i := 0; i < w; i++ {
+		b.WriteString(fg(lerp(from, to, i, w-1), "━"))
+	}
+	return b.String()
+}
+
+// lerp: step i of n between two packed RGB values.
+func lerp(a, b uint32, i, n int) lipgloss.Color {
+	if n < 1 {
+		n = 1
+	}
+	ch := func(sh uint) int {
+		x, y := int(a>>sh&0xff), int(b>>sh&0xff)
+		return x + (y-x)*i/n
+	}
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", ch(16), ch(8), ch(0)))
+}
+
 // header: 2 lines in both states — a content line and a rule. Focus is carried
 // by the rule (heavy cyan ━ vs thin gray ─) + brightness, never a block. The
 // caller decides their order: the rule always faces the list.
@@ -1064,16 +1089,9 @@ func (m model) header() (content, rule string) {
 	}
 	top := left + strings.Repeat(" ", gap) + soundBadge + " "
 
-	var base string
+	base := m.rule()
 	if live {
-		n := max(4, (rw-2)*4/10)
-		if n > rw-2 {
-			n = rw - 2
-		}
-		base = " " + fg(lipgloss.Color("#2dccd3"), strings.Repeat("━", n)) +
-			fg(lipgloss.Color("#24494b"), strings.Repeat("━", rw-2-n))
-	} else {
-		base = m.rule()
+		base = " " + focusRule(rw-2)
 	}
 	return top, base
 }
