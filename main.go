@@ -1128,13 +1128,17 @@ func (m model) header() (content, rule string) {
 		left += fg(lipgloss.Color("#3f4646"), " │ ") + strings.Join(parts, " ")
 	}
 	// rightmost element: the sound toggle, rendered like the window-# badges
-	// (glyph on a filled chip) so it's easy to see — cyan when on; when off, an
-	// opaque red chip with the note struck through (clearly "muted").
-	sBg, sFg, sGlyph := lipgloss.Color("#6e3634"), lipgloss.Color("#eccbca"), " ✕ "
+	// (glyph on a filled chip) so it's easy to see — cyan when on, an opaque red
+	// chip with the note struck through when off. It is the same note either
+	// way: a ✕ on a red chip read as "close", which is not what it does.
+	sBg, sFg := lipgloss.Color("#6e3634"), lipgloss.Color("#eccbca")
 	if m.sound {
-		sBg, sFg, sGlyph = lipgloss.Color("#2dccd3"), badgeFg, " ♫ "
+		sBg, sFg = lipgloss.Color("#2dccd3"), badgeFg
 	}
-	soundBadge := lipgloss.NewStyle().Background(sBg).Foreground(sFg).Render(sGlyph)
+	chip := lipgloss.NewStyle().Background(sBg).Foreground(sFg)
+	// only the note carries the strike — a struck chip would risk lining out
+	// its padding too, which reads as a dash, not a mute.
+	soundBadge := chip.Render(" ") + chip.Strikethrough(!m.sound).Render("♫") + chip.Render(" ")
 	gap := rw - lipgloss.Width(left) - lipgloss.Width(soundBadge) - 1
 	if gap < 1 {
 		gap = 1

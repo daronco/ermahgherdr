@@ -49,7 +49,7 @@ tmux refresh-client -S 2>/dev/null || true
 #   perm -> needs your authorization  (urgent)
 #   done -> finished, your turn       (softer, "maybe continue")
 # Both gated by the tmux global @dai_bar_sound, toggled from the dai-bar UI
-# (🔔/🔕). Override the files with DAI_BAR_SOUND_PERM / DAI_BAR_SOUND_DONE.
+# (the ♫ chip). Override the files with DAI_BAR_SOUND_PERM / DAI_BAR_SOUND_DONE.
 snd=""
 case "$new" in
   perm) snd="${DAI_BAR_SOUND_PERM:-/usr/share/sounds/freedesktop/stereo/complete.oga}" ;;
