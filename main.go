@@ -692,8 +692,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if msg.Y == 1 && msg.X >= m.rowW()-5 {
-				m.toggleSound() // sound badge lives at the header's right edge
+			if msg.Y == m.soundRow() && msg.X >= m.rowW()-5 {
+				m.toggleSound() // sound badge lives at the counter row's right edge
 			} else if idx := m.hitTest(msg.Y); idx >= 0 {
 				m.sel = idx
 				m.jump()
@@ -798,6 +798,16 @@ func (m model) listTop() int {
 		tall += m.itemHeight(it, m.comp)
 	}
 	return m.h - chromeRows - tall // negative when it overflows: rows scroll off the top
+}
+
+// soundRow: the row the counter line is drawn on — where the sound badge sits,
+// and the one row a click means something other than picking a session. It
+// moved to the foot with the rest of the chrome.
+func (m model) soundRow() int {
+	if m.top {
+		return 1
+	}
+	return m.h - 2
 }
 
 func (m model) hitTest(y int) int {

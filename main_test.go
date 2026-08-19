@@ -185,3 +185,17 @@ func TestFocusRuleWidth(t *testing.T) {
 		t.Errorf("lerp should land on the dim end, got %v", lerp(0x2dccd3, 0x24494b, 10, 10))
 	}
 }
+
+// soundRow has to name the counter row in both layouts: a click there toggles
+// the sound instead of jumping to a session.
+func TestSoundRowIsTheCounterRow(t *testing.T) {
+	rows := []sess{{pane: "%1", name: "one", st: idle, w: 1}}
+	for _, top := range []bool{false, true} {
+		m := model{w: 28, h: 30, top: top, rows: rows}
+		m.recomputeDensity()
+		lines := strings.Split(m.View(), "\n")
+		if !strings.Contains(lines[m.soundRow()], "👾") {
+			t.Errorf("top=%v: row %d is not the counter row: %q", top, m.soundRow(), lines[m.soundRow()])
+		}
+	}
+}
