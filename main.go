@@ -571,9 +571,13 @@ func padL(s string, n int) string {
 
 // ---------- bubbletea ----------
 
-// chromeRows: the margin + header (2 lines) + margin that bracket the list. The
-// same four rows either way up — they just sit at the other end.
-const chromeRows = 4
+// chromeRows: the foot block that brackets the list — margin, divider, key
+// legend, header rule, counters, margin. The same six rows either way up; they
+// just sit at the other end.
+const chromeRows = 6
+
+// mascotPad: blank rows between the mascot and the panel edge it hangs from.
+const mascotPad = 2
 
 func (m model) Init() tea.Cmd { return tea.Batch(animCmd(), dataCmd()) }
 
@@ -653,7 +657,7 @@ func (m *model) recomputeDensity() {
 	}
 	tall := 0
 	for _, it := range m.rows {
-		tall += m.itemHeight(it, false) + 1
+		tall += m.itemHeight(it, false) // an item's padding is inside it; no gap
 	}
 	if !m.comp && tall > avail {
 		m.comp = true
@@ -999,13 +1003,11 @@ func (m model) counts() (u, d, p, i int) {
 	return
 }
 
-func (m model) overflowNow() bool {
-	avail := m.h - chromeRows - 2 // footer + its margin
-	tall := 0
-	for _, it := range m.rows {
-		tall += m.itemHeight(it, m.comp) // padding is inside each item; no gap
-	}
-	return tall > avail
+// rule: the thin separator. It divides the key legend from the list, and it is
+// what the header's own rule falls back to when the bar is unfocused — focus is
+// signalled by that one turning heavy and cyan, and by nothing else.
+func (m model) rule() string {
+	return " " + fg(lipgloss.Color("#2a3030"), strings.Repeat("─", m.rowW()-2))
 }
 
 // header: 2 lines in both states — a content line and a rule. Focus is carried
@@ -1071,7 +1073,7 @@ func (m model) header() (content, rule string) {
 		base = " " + fg(lipgloss.Color("#2dccd3"), strings.Repeat("━", n)) +
 			fg(lipgloss.Color("#24494b"), strings.Repeat("━", rw-2-n))
 	} else {
-		base = " " + fg(lipgloss.Color("#2a3030"), strings.Repeat("─", rw-2))
+		base = m.rule()
 	}
 	return top, base
 }
@@ -1092,24 +1094,38 @@ func (m model) View() string {
 			list = append(list, strings.Split(m.renderItem(it, idx, th), "\n")...)
 		}
 	}
-	var hint []string // the key legend, only worth a line when there is a list
+	// The foot: everything that is not a session, in one block against the edge
+	// the eye rests on — a margin, the key legend behind its own divider, then
+	// the header's rule and counters. With no sessions the legend has nothing
+	// to explain and drops out.
+	foot := []string{"", rule, head, ""}
 	if len(m.rows) > 0 {
-		hint = []string{"", " " + fg(th.calm, "↑↓ move  ⏎ go")}
+		foot = []string{"", m.rule(), " " + fg(th.calm, "↑↓ move  ⏎ go"), rule, head, ""}
+	}
+	// The mascot is decoration and yields whole — a cropped one reads as a
+	// glitch, not as a mascot. It needs its padding and a row of gap to earn
+	// its place.
+	var mascot []string
+	if art := m.mascotArt(m.rowW(), m.focused); len(list)+len(foot)+len(art)+mascotPad < m.h {
+		pad := make([]string, mascotPad)
+		if m.top {
+			mascot = append(art, pad...)
+		} else {
+			mascot = append(pad, art...)
+		}
 	}
 
 	var lead, trail []string
 	if m.top {
-		lead = append([]string{"", head, rule, ""}, list...)
-		lead = append(lead, hint...)
-		trail = m.mascotArt(m.rowW(), m.focused)
+		lead = append(reversed(foot), list...)
+		trail = mascot
 	} else {
-		lead = m.mascotArt(m.rowW(), m.focused)
-		trail = append(reversed(hint), list...)
-		trail = append(trail, "", rule, head, "")
+		lead = mascot
+		trail = append(list, foot...)
 	}
 	gap := m.h - len(lead) - len(trail)
-	if gap < 1 {
-		gap = 1
+	if gap < 0 {
+		gap = 0
 	}
 	rows := append(append(lead, make([]string, gap)...), trail...)
 	// Too many sessions to fit: the far end scrolls off — the mascot first,
@@ -1125,8 +1141,8 @@ func (m model) View() string {
 	return panel(th, m.w, m.h, strings.Join(rows, "\n"))
 }
 
-// reversed: the hint and its margin swap order when the layout flips, so the
-// blank line always faces the list.
+// reversed: the foot block reads the other way round when the layout flips, so
+// its margin always faces the panel edge and its rule always faces the list.
 func reversed(ss []string) []string {
 	out := make([]string, len(ss))
 	for i, v := range ss {
