@@ -30,6 +30,11 @@ Green clears the moment you actually see the pane — you jump to it from the ba
 or you focus the terminal with tmux showing it. Reading it in the bar's preview
 (arrows) doesn't count; that's browsing, not reading.
 
+`u` (or a right-click on the item) puts the green back: you read it and want it
+to keep asking. That mark is pinned — unlike the automatic green it survives the
+pane being right there in front of you, and only a deliberate jump, or the
+session doing something new, clears it.
+
 Cyan means only *you*: the selection band, the current-session arrow, and the
 focused-header underline. When the bar has keyboard focus the little 👾 at the
 bottom raises its hands.
@@ -107,8 +112,9 @@ and 🟢 apart from a session sitting quietly.
 
 `↑/↓` (or `j/k`) move · `Enter` / click jump to the session · `r` reload · `q` quit.
 
-`alt+<n>` jumps straight to tmux window `<n>`. `s` toggles the sound, same as
-clicking the badge in the counter row.
+`u` / right-click marks a session unread again. `alt+<n>` jumps straight to tmux
+window `<n>`. `s` toggles the sound, same as clicking the badge in the counter
+row.
 
 ---
 

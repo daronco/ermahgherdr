@@ -134,6 +134,7 @@ const (
 
 type sess struct {
 	pane, sessWin, name string
+	mark                string // the pane option, verbatim — "unread" resists auto-read
 	st                  state
 	since               int64
 	s, w, p             int
@@ -269,7 +270,8 @@ func readScreen(body string) screen {
 // the item on red or amber for good. The screen is what breaks that.
 //
 // Anything that stopped and has not been looked at is `done`, not idle: "waiting"
-// means read, and only the bar writes it, when you look.
+// means read, and only the bar writes it, when you look. "unread" is the same
+// green, put there by hand — see markUnread.
 func statusOf(wait string, sc screen, seen bool) state {
 	switch {
 	case sc.busy:
@@ -278,7 +280,7 @@ func statusOf(wait string, sc screen, seen bool) state {
 		return urgent // gather has already dropped the marks it disbelieves
 	case wait == "working" && !seen:
 		return proc
-	case wait == "working", wait == "done":
+	case wait == "working", wait == "done", wait == "unread":
 		return done
 	}
 	return idle
@@ -297,6 +299,14 @@ func permAlive(sc screen, seen bool, age int64, misses int) bool {
 // restart of the bar and so the hook sees it on its next transition.
 func markRead(pane string) {
 	run("tmux", "set", "-p", "-t", pane, "@dai_bar_wait", "waiting")
+}
+
+// markUnread puts the green back by hand — you read it, and you want it to keep
+// asking. It is a mark of its own rather than a plain "done" because the pane
+// you are staring at while you press u would be auto-read again on the next
+// poll; only a deliberate jump (or the session doing something new) clears it.
+func markUnread(pane string) {
+	run("tmux", "set", "-p", "-t", pane, "@dai_bar_wait", "unread")
 }
 
 func cleanName(title, path string) string {
@@ -351,12 +361,12 @@ func gather(permMiss map[string]int) []sess {
 		// Write the conclusion back, so the hook's next transition compares
 		// against the state we are actually showing — and does not ping for a
 		// "finished" it thinks is new.
-		if seen && st == done && c[4] != "done" {
+		if seen && st == done && c[4] != "done" && c[4] != "unread" {
 			run("tmux", "set", "-p", "-t", c[0], "@dai_bar_wait", "done")
 		}
 		rows = append(rows, sess{
 			pane: c[0], sessWin: c[1] + ":" + c[2], name: cleanName(c[7], c[6]),
-			st: st, since: since,
+			mark: wait, st: st, since: since,
 			s: atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
 		})
 	}
@@ -606,7 +616,8 @@ func (m *model) refresh() {
 	// the keyboard and tmux is showing that pane, so the answer is on screen.
 	if m.termFoc && m.current != "" {
 		for i := range m.rows {
-			if m.rows[i].pane == m.current && m.rows[i].st == done {
+			if m.rows[i].pane == m.current && m.rows[i].st == done &&
+				m.rows[i].mark != "unread" {
 				markRead(m.rows[i].pane)
 				m.rows[i].st = idle
 			}
@@ -691,12 +702,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeDensity()
 		return m, nil
 	case tea.MouseMsg:
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseButtonLeft:
 			if msg.Y == m.soundRow() && msg.X >= m.rowW()-5 {
 				m.toggleSound() // sound badge lives at the counter row's right edge
 			} else if idx := m.hitTest(msg.Y); idx >= 0 {
 				m.sel = idx
 				m.jump()
+			}
+		case tea.MouseButtonRight:
+			if idx := m.hitTest(msg.Y); idx >= 0 {
+				m.sel = idx
+				m.unread()
 			}
 		}
 		return m, nil
@@ -709,6 +729,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "s", "S":
 			m.toggleSound()
+		case "u", "U":
+			m.unread()
 		case "up", "k":
 			if m.sel > 0 {
 				m.sel--
@@ -742,6 +764,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// unread: put the green back on the selected session. Right-click does the same
+// to whatever is under the pointer.
+func (m *model) unread() {
+	if s, ok := m.cur(); ok {
+		markUnread(s.pane)
+		m.rows[m.sel].mark, m.rows[m.sel].st = "unread", done
+	}
 }
 
 func (m *model) jump() {
@@ -1013,6 +1044,17 @@ func (m model) counts() (u, d, p, i int) {
 	return
 }
 
+// legend: the widest key hint that fits. A row one cell over its width gets
+// wrapped by lipgloss, and everything below it shifts.
+func (m model) legend() string {
+	for _, s := range []string{"↑↓ move  ⏎ go  u unread", "↑↓ ⏎ go  u unread", "⏎ go  u unread", "⏎ · u"} {
+		if utf8.RuneCountInString(s)+1 <= m.rowW() {
+			return " " + s
+		}
+	}
+	return ""
+}
+
 // rule: the thin separator. It divides the key legend from the list, and it is
 // what the header's own rule falls back to when the bar is unfocused — focus is
 // signalled by that one turning heavy and cyan, and by nothing else.
@@ -1128,7 +1170,7 @@ func (m model) View() string {
 	// to explain and drops out.
 	foot := []string{"", rule, head, ""}
 	if len(m.rows) > 0 {
-		foot = []string{"", m.rule(), " " + fg(th.calm, "↑↓ move  ⏎ go"), rule, head, ""}
+		foot = []string{"", m.rule(), fg(th.calm, m.legend()), rule, head, ""}
 	}
 	// The mascot is decoration and yields whole — a cropped one reads as a
 	// glitch, not as a mascot. It needs its padding and a row of gap to earn

@@ -186,6 +186,27 @@ func TestFocusRuleWidth(t *testing.T) {
 	}
 }
 
+// The pinned unread mark exists so the session you are looking at can still be
+// green; if it read like a plain "done" the auto-read would wipe it next poll.
+func TestUnreadMark(t *testing.T) {
+	if got := statusOf("unread", screen{}, true); got != done {
+		t.Errorf("unread should render green, got %v", got)
+	}
+	if got := statusOf("unread", screen{busy: true}, true); got != proc {
+		t.Errorf("a session back at work outranks the pin, got %v", got)
+	}
+}
+
+// The legend must never be wider than the row, at any width.
+func TestLegendFits(t *testing.T) {
+	for w := 8; w <= 60; w++ {
+		m := model{w: w}
+		if got := lipgloss.Width(m.legend()); got > m.rowW() {
+			t.Errorf("w=%d: legend is %d wide, rowW is %d", w, got, m.rowW())
+		}
+	}
+}
+
 // soundRow has to name the counter row in both layouts: a click there toggles
 // the sound instead of jumping to a session.
 func TestSoundRowIsTheCounterRow(t *testing.T) {
