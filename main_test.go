@@ -107,6 +107,46 @@ func TestReadScreenCaptures(t *testing.T) {
 	}
 }
 
+// listTop feeds hitTest, and View draws the list — derived separately, they can
+// drift apart, and a click then lands on the wrong session. This pins them
+// together in both layouts, including when the panel is too short to fit.
+func TestListTopMatchesRender(t *testing.T) {
+	rows := []sess{
+		{pane: "%1", name: "alphamark", st: idle, w: 1},
+		{pane: "%2", name: "betamark", st: done, w: 2},
+		{pane: "%3", name: "gammamark", st: proc, w: 3},
+		{pane: "%4", name: "deltamark", st: urgent, w: 4},
+	}
+	for _, top := range []bool{false, true} {
+		for _, h := range []int{44, 24, 14} {
+			m := model{w: 28, h: h, top: top, rows: rows}
+			m.recomputeDensity()
+			lines := strings.Split(m.View(), "\n")
+			if len(lines) != h {
+				t.Errorf("top=%v h=%d: rendered %d lines", top, h, len(lines))
+			}
+			drawn := -1
+			for i, ln := range lines {
+				if strings.Contains(ln, "alphamark") {
+					drawn = i
+					break
+				}
+			}
+			want := m.listTop()
+			if !m.comp {
+				want++ // a full-size item block opens with a padding row
+			}
+			if want < 0 { // scrolled off the top: nothing to compare against
+				continue
+			}
+			if drawn != want {
+				t.Errorf("top=%v h=%d comp=%v: first item name drawn at %d, want %d",
+					top, h, m.comp, drawn, want)
+			}
+		}
+	}
+}
+
 // Every rendered row must fit rowW: one cell over and lipgloss wraps it onto a
 // second line, which shifts everything below it and breaks hitTest.
 func TestRowsFitWidth(t *testing.T) {

@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -150,6 +151,7 @@ type model struct {
 	pulse    map[string]int
 	wasUrg   map[string]bool
 	permMiss map[string]int // consecutive polls a "perm" mark went uncorroborated
+	top      bool           // lay out top-down (the --top flag) instead of bottom-up
 	comp     bool           // compact (geometry-based, with 1-item hysteresis)
 	sound    bool           // audible alerts on (mirrors tmux global @dai_bar_sound)
 }
@@ -569,7 +571,9 @@ func padL(s string, n int) string {
 
 // ---------- bubbletea ----------
 
-const contentTop = 4 // top margin + header (2 lines) + margin
+// chromeRows: the margin + header (2 lines) + margin that bracket the list. The
+// same four rows either way up — they just sit at the other end.
+const chromeRows = 4
 
 func (m model) Init() tea.Cmd { return tea.Batch(animCmd(), dataCmd()) }
 
@@ -643,7 +647,7 @@ func (m *model) refresh() {
 
 // density switches by available geometry, with 1-item hysteresis.
 func (m *model) recomputeDensity() {
-	avail := m.h - contentTop - 1
+	avail := m.h - chromeRows - 1
 	if avail < 1 || len(m.rows) == 0 {
 		return
 	}
@@ -779,8 +783,21 @@ func (m model) itemHeight(it sess, comp bool) int {
 	return len(m.nameLines(it)) + 1 + 2
 }
 
+// listTop: the screen row the first item is drawn on. Bottom-up, the list is
+// pinned above the footer chrome, so where it starts depends on how tall it is.
+func (m model) listTop() int {
+	if m.top {
+		return chromeRows
+	}
+	tall := 0
+	for _, it := range m.rows {
+		tall += m.itemHeight(it, m.comp)
+	}
+	return m.h - chromeRows - tall // negative when it overflows: rows scroll off the top
+}
+
 func (m model) hitTest(y int) int {
-	row := contentTop
+	row := m.listTop()
 	for i, it := range m.rows {
 		hh := m.itemHeight(it, m.comp)
 		if y >= row && y < row+hh {
@@ -983,7 +1000,7 @@ func (m model) counts() (u, d, p, i int) {
 }
 
 func (m model) overflowNow() bool {
-	avail := m.h - contentTop - 2 // footer + its margin
+	avail := m.h - chromeRows - 2 // footer + its margin
 	tall := 0
 	for _, it := range m.rows {
 		tall += m.itemHeight(it, m.comp) // padding is inside each item; no gap
@@ -991,9 +1008,10 @@ func (m model) overflowNow() bool {
 	return tall > avail
 }
 
-// header: 2 lines in both states — a content line and a base line. Focus is
-// carried by the base (heavy cyan ━ vs thin gray ─) + brightness, never a block.
-func (m model) header() string {
+// header: 2 lines in both states — a content line and a rule. Focus is carried
+// by the rule (heavy cyan ━ vs thin gray ─) + brightness, never a block. The
+// caller decides their order: the rule always faces the list.
+func (m model) header() (content, rule string) {
 	rw := m.rowW()
 	live := m.focused && len(m.rows) > 0
 
@@ -1055,29 +1073,66 @@ func (m model) header() string {
 	} else {
 		base = " " + fg(lipgloss.Color("#2a3030"), strings.Repeat("─", rw-2))
 	}
-	return top + "\n" + base
+	return top, base
 }
 
+// View stacks three blocks against an elastic gap the mascot floats on. Which
+// end each block sits at is the whole of the layout: bottom-up (the default)
+// puts the sessions and the counters down where the eye already rests and
+// leaves the mascot the empty top; --top is the mirror of that.
 func (m model) View() string {
 	th := themeFor(m.focused)
+	head, rule := m.header()
 
-	var b strings.Builder
-	b.WriteString("\n")              // top margin (a full line — reads better than a thin one)
-	b.WriteString(m.header() + "\n") // header: 2 lines
-	b.WriteString("\n")              // margin below the header
-
+	var list []string
 	if len(m.rows) == 0 {
-		b.WriteString(" " + fg(th.meta, "no claude") + "\n")
-		b.WriteString(" " + fg(th.meta, "sessions") + "\n")
-		return m.finish(th, b.String())
+		list = []string{" " + fg(th.meta, "no claude"), " " + fg(th.meta, "sessions")}
+	} else {
+		for idx, it := range m.rows {
+			list = append(list, strings.Split(m.renderItem(it, idx, th), "\n")...)
+		}
+	}
+	var hint []string // the key legend, only worth a line when there is a list
+	if len(m.rows) > 0 {
+		hint = []string{"", " " + fg(th.calm, "↑↓ move  ⏎ go")}
 	}
 
-	for idx, it := range m.rows {
-		b.WriteString(m.renderItem(it, idx, th) + "\n")
+	var lead, trail []string
+	if m.top {
+		lead = append([]string{"", head, rule, ""}, list...)
+		lead = append(lead, hint...)
+		trail = m.mascotArt(m.rowW(), m.focused)
+	} else {
+		lead = m.mascotArt(m.rowW(), m.focused)
+		trail = append(reversed(hint), list...)
+		trail = append(trail, "", rule, head, "")
 	}
-	b.WriteString("\n") // margin above the footer
-	b.WriteString(" " + fg(th.calm, "↑↓ move  ⏎ go"))
-	return m.finish(th, b.String())
+	gap := m.h - len(lead) - len(trail)
+	if gap < 1 {
+		gap = 1
+	}
+	rows := append(append(lead, make([]string, gap)...), trail...)
+	// Too many sessions to fit: the far end scrolls off — the mascot first,
+	// then the oldest items. Cutting the whole block from one end (rather than
+	// trimming a part) is what keeps listTop's arithmetic true.
+	if over := len(rows) - m.h; over > 0 {
+		if m.top {
+			rows = rows[:m.h]
+		} else {
+			rows = rows[over:]
+		}
+	}
+	return panel(th, m.w, m.h, strings.Join(rows, "\n"))
+}
+
+// reversed: the hint and its margin swap order when the layout flips, so the
+// blank line always faces the list.
+func reversed(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, v := range ss {
+		out[len(ss)-1-i] = v
+	}
+	return out
 }
 
 // mascotArt: the 👾 bitmap scaled to ~60% width, centered, in a very faded
@@ -1144,18 +1199,6 @@ func (m model) mascotArt(rw int, focused bool) []string {
 	return out
 }
 
-// finish: pin the faded mascot to the bottom of the panel, then render.
-func (m model) finish(th theme, body string) string {
-	art := m.mascotArt(m.rowW(), m.focused)
-	used := strings.Count(body, "\n") + 1
-	pad := m.h - used - len(art)
-	if pad < 1 {
-		pad = 1
-	}
-	body += strings.Repeat("\n", pad) + strings.Join(art, "\n")
-	return panel(th, m.w, m.h, body)
-}
-
 func panel(th theme, w, h int, body string) string {
 	st := lipgloss.NewStyle().Background(th.panel).
 		Border(lipgloss.NormalBorder(), false, true, false, false). // right edge only
@@ -1170,7 +1213,11 @@ func panel(th theme, w, h int, body string) string {
 }
 
 func main() {
-	m := model{}
+	top := flag.Bool("top", false,
+		"lay the bar out top-down: counters and sessions at the top, mascot at the bottom")
+	flag.Parse()
+
+	m := model{top: *top}
 	m.refresh()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	fm, err := p.Run()

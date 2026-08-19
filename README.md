@@ -14,6 +14,11 @@ Each running `claude` session is a two-line block — name on top, elapsed time
 below — with a fixed left "meter" and, on the right, a `▸` arrow marking the
 session your terminal is currently showing.
 
+The panel reads **bottom-up**: the sessions and the counter row sit at the foot,
+where your eyes already rest on a tall sidebar, and the mascot takes the empty
+space above. `dai-bar --top` mirrors that — counters and sessions at the top,
+mascot at the bottom.
+
 Status by color (**color means urgency, nothing else**):
 
 - 🔴 **red** — needs you: a permission prompt is waiting.
@@ -101,6 +106,9 @@ and 🟢 apart from a session sitting quietly.
 ## Keys
 
 `↑/↓` (or `j/k`) move · `Enter` / click jump to the session · `r` reload · `q` quit.
+
+`alt+<n>` jumps straight to tmux window `<n>`. `s` toggles the sound, same as
+clicking the badge in the counter row.
 
 ---
 
