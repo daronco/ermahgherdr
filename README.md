@@ -14,6 +14,10 @@ Each running `claude` session is a two-line block — name on top, elapsed time
 below — with a fixed left "meter" and, on the right, a `▸` arrow marking the
 session your terminal is currently showing.
 
+The name comes from the pane title claude publishes. Set the pane option
+`@ctx_label` and that wins instead — for when something else already labels your
+tmux tabs and the two should agree.
+
 The panel reads **bottom-up**: the sessions and the counter row sit at the foot,
 where your eyes already rest on a tall sidebar, and the mascot takes the empty
 space above. `dai-bar --top` mirrors that — counters and sessions at the top,

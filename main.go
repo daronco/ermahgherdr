@@ -332,13 +332,14 @@ func gather(permMiss map[string]int) []sess {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@dai_bar_wait}", "#{@dai_bar_wait_since}", "#{pane_current_path}", "#{pane_title}",
+		"#{@ctx_label}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var recs [][]string
 	var panes []string
 	for _, line := range strings.Split(out, "\n") {
 		c := strings.Split(line, "\t")
-		if len(c) < 8 || c[0] == "" {
+		if len(c) < 9 || c[0] == "" {
 			continue
 		}
 		recs, panes = append(recs, c), append(panes, c[0])
@@ -364,8 +365,14 @@ func gather(permMiss map[string]int) []sess {
 		if seen && st == done && c[4] != "done" && c[4] != "unread" {
 			run("tmux", "set", "-p", "-t", c[0], "@dai_bar_wait", "done")
 		}
+		// @ctx_label, when something outside sets it, is the same short label the
+		// tmux tab shows — the bar and the tab should not disagree about a session.
+		name := strings.TrimSpace(c[8])
+		if name == "" {
+			name = cleanName(c[7], c[6])
+		}
 		rows = append(rows, sess{
-			pane: c[0], sessWin: c[1] + ":" + c[2], name: cleanName(c[7], c[6]),
+			pane: c[0], sessWin: c[1] + ":" + c[2], name: name,
 			mark: wait, st: st, since: since,
 			s: atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
 		})
