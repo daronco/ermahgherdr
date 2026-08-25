@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -218,5 +219,92 @@ func TestSoundRowIsTheCounterRow(t *testing.T) {
 		if !strings.Contains(lines[m.soundRow()], "👾") {
 			t.Errorf("top=%v: row %d is not the counter row: %q", top, m.soundRow(), lines[m.soundRow()])
 		}
+	}
+}
+
+// The render caches are only safe while their keys cover every input their
+// renderer reads. These two pin that: the first that styling a line on its own
+// is what styling the block does, the second that a cache hit is byte-for-byte
+// the render it stands in for.
+
+func TestPanelPerLineMatchesBlock(t *testing.T) {
+	rows := []sess{
+		{pane: "%1", name: "alphamark", st: idle, w: 1, since: 1},
+		{pane: "%2", name: "betamark", st: done, w: 2, since: 1},
+		{pane: "%3", name: "gammamark", st: proc, w: 3, since: 1},
+		{pane: "%4", name: "deltamark", st: urgent, w: 4, since: 1},
+	}
+	for _, h := range []int{81, 44, 24, 14} {
+		for _, w := range []int{38, 28, 22} {
+			m := model{w: w, h: h, rows: rows, pulse: map[string]int{},
+				pcache: map[string]string{}}
+			m.recomputeDensity()
+			body := m.View() // fills pcache via panelLines
+			plain := model{w: w, h: h, rows: rows, pulse: map[string]int{}}
+			plain.recomputeDensity()
+			if want := plain.View(); body != want {
+				t.Errorf("w=%d h=%d: panelLines diverge de panel", w, h)
+			}
+		}
+	}
+}
+
+func TestItemCacheMatchesRender(t *testing.T) {
+	th := themeFor(false)
+	names := []string{"abel/segurança", "pp/semana-35", "x", "um nome bem comprido que trunca"}
+	for _, comp := range []bool{false, true} {
+		for _, st := range []state{idle, done, proc, urgent} {
+			for _, nm := range names {
+				for _, since := range []int64{0, 1, time.Now().Unix() - 90} {
+					for _, pulse := range []int{0, 3} {
+						for frame := 0; frame < 9; frame++ {
+							for _, sel := range []bool{false, true} {
+								for _, cur := range []bool{false, true} {
+									it := sess{pane: "%7", name: nm, st: st, w: 3, since: since}
+									m := model{w: 38, h: 44, rows: []sess{it}, comp: comp,
+										frame: frame, pulse: map[string]int{"%7": pulse},
+										icache: map[itemKey]string{}}
+									if sel {
+										m.sel = 0
+									} else {
+										m.sel = -1
+									}
+									if cur {
+										m.current = "%7"
+									}
+									want := m.renderItem(it, 0, th)
+									// twice: the first fills the cache, the second must hit it
+									if got := m.itemLines(it, 0, th); got != want {
+										t.Fatalf("miss diverge: st=%v comp=%v frame=%d sel=%v cur=%v nm=%q",
+											st, comp, frame, sel, cur, nm)
+									}
+									if got := m.itemLines(it, 0, th); got != want {
+										t.Fatalf("hit diverge: st=%v comp=%v frame=%d sel=%v cur=%v nm=%q",
+											st, comp, frame, sel, cur, nm)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// A cache that never invalidates would show the old frame forever: walking the
+// spinner through its cycle has to produce a different row each step.
+func TestItemCacheFollowsSpinner(t *testing.T) {
+	th := themeFor(false)
+	it := sess{pane: "%7", name: "trabalhando", st: proc, w: 3, since: 1}
+	m := model{w: 38, h: 44, rows: []sess{it}, sel: -1,
+		pulse: map[string]int{}, icache: map[itemKey]string{}}
+	seen := map[string]bool{}
+	for f := 0; f < len(spinnerFrames); f++ {
+		m.frame = f
+		seen[m.itemLines(it, 0, th)] = true
+	}
+	if len(seen) != len(spinnerFrames) {
+		t.Errorf("spinner rendeu %d quadros distintos, esperava %d", len(seen), len(spinnerFrames))
 	}
 }

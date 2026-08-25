@@ -160,6 +160,83 @@ type model struct {
 	sway     *swayWatch     // the compositor feed: who has focus, are we on screen
 	hidden   bool           // the bar's window is on a workspace nobody is showing
 	anim     bool           // the animation tick is running (see moving)
+	icache   map[itemKey]string
+	pcache   map[string]string
+}
+
+// ---------- render cache ----------
+//
+// lipgloss re-resolves a colour every time it applies one: "#e05b57" goes
+// through fmt.Sscanf on every single Render. A frame applies a few hundred
+// styles, which put 80% of the bar's CPU in View — to redraw a picture where
+// one spinner cell moved. Both caches key on exactly the inputs their renderer
+// reads, so a hit is the same bytes the miss would have produced.
+
+// itemKey is every input renderItem reads. glyph, meta and age are pre-resolved
+// because they are what fold m.frame, m.pulse and the clock into a row.
+type itemKey struct {
+	pane, name, glyph, meta, age string
+	glyphCol                     lipgloss.Color
+	st                           state
+	win, rowW, nameW             int
+	sel, cur, comp               bool
+}
+
+// cacheCap: the age text ticks every second, so keys churn. Dropping the whole
+// map beats keeping an eviction order for something this small.
+const cacheCap = 512
+
+// itemLines is renderItem, memoised. A nil cache renders straight through, so a
+// model built without one (the tests) still behaves.
+func (m model) itemLines(it sess, idx int, th theme) string {
+	if m.icache == nil {
+		return m.renderItem(it, idx, th)
+	}
+	g, gc := m.glyphRune(it, th)
+	k := itemKey{
+		pane: it.pane, name: it.name, glyph: g, glyphCol: gc,
+		meta: metaLine(it), age: fmtAge(it.since), st: it.st,
+		win: it.w, rowW: m.rowW(), nameW: m.nameW(),
+		sel: idx == m.sel, cur: it.pane == m.current, comp: m.comp,
+	}
+	if s, ok := m.icache[k]; ok {
+		return s
+	}
+	s := m.renderItem(it, idx, th)
+	if len(m.icache) >= cacheCap {
+		clear(m.icache)
+	}
+	m.icache[k] = s
+	return s
+}
+
+// panelLines is panel(), one line at a time so the unchanged ones come from the
+// map. Byte-identical to styling the whole block — TestPanelPerLineMatchesBlock
+// pins that. The cache is keyed by line content alone, so a width change has to
+// drop it (see tea.WindowSizeMsg).
+func (m model) panelLines(th theme, w, h int, lines []string) string {
+	st := lipgloss.NewStyle().Background(th.panel).
+		Border(lipgloss.NormalBorder(), false, true, false, false).
+		BorderForeground(borderGray).BorderBackground(th.panel)
+	if w > 1 {
+		st = st.Width(w - 1)
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		s, ok := m.pcache[l]
+		if !ok {
+			s = st.Render(l)
+			if len(m.pcache) >= cacheCap {
+				clear(m.pcache)
+			}
+			m.pcache[l] = s
+		}
+		out[i] = s
+	}
+	return strings.Join(out, "\n")
 }
 
 type animMsg time.Time
@@ -981,6 +1058,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.recomputeDensity()
+		clear(m.pcache) // keyed by line content, which says nothing about width
 		return m, nil
 	case tea.MouseMsg:
 		if msg.Action != tea.MouseActionPress {
@@ -1446,7 +1524,7 @@ func (m model) View() string {
 		list = []string{" " + fg(th.meta, "no claude"), " " + fg(th.meta, "sessions")}
 	} else {
 		for idx, it := range m.rows {
-			list = append(list, strings.Split(m.renderItem(it, idx, th), "\n")...)
+			list = append(list, strings.Split(m.itemLines(it, idx, th), "\n")...)
 		}
 	}
 	// The foot: everything that is not a session, in one block against the edge
@@ -1493,7 +1571,10 @@ func (m model) View() string {
 			rows = rows[over:]
 		}
 	}
-	return panel(th, m.w, m.h, strings.Join(rows, "\n"))
+	if m.pcache == nil {
+		return panel(th, m.w, m.h, strings.Join(rows, "\n"))
+	}
+	return m.panelLines(th, m.w, m.h, rows)
 }
 
 // reversed: the foot block reads the other way round when the layout flips, so
@@ -1588,7 +1669,8 @@ func main() {
 		"lay the bar out top-down: counters and sessions at the top, mascot at the bottom")
 	flag.Parse()
 
-	m := model{top: *top, sway: newSwayWatch()}
+	m := model{top: *top, sway: newSwayWatch(),
+		icache: map[itemKey]string{}, pcache: map[string]string{}}
 	m.refresh()
 	m.anim = true // Init starts the tick; the first animMsg decides if it lives
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
