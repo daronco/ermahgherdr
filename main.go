@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -155,6 +157,9 @@ type model struct {
 	top      bool           // lay out top-down (the --top flag) instead of bottom-up
 	comp     bool           // compact (geometry-based, with 1-item hysteresis)
 	sound    bool           // audible alerts on (mirrors tmux global @dai_bar_sound)
+	sway     *swayWatch     // the compositor feed: who has focus, are we on screen
+	hidden   bool           // the bar's window is on a workspace nobody is showing
+	anim     bool           // the animation tick is running (see moving)
 }
 
 type animMsg time.Time
@@ -163,8 +168,16 @@ type dataMsg time.Time
 func animCmd() tea.Cmd {
 	return tea.Tick(140*time.Millisecond, func(t time.Time) tea.Msg { return animMsg(t) })
 }
-func dataCmd() tea.Cmd {
-	return tea.Tick(600*time.Millisecond, func(t time.Time) tea.Msg { return dataMsg(t) })
+
+// dataCmd polls tmux. Hidden — the bar's window is parked on a workspace no
+// output is showing — it polls at a third of the rate: the list still has to be
+// right when the workspace comes back, just not right to the half-second.
+func dataCmd(hidden bool) tea.Cmd {
+	d := 600 * time.Millisecond
+	if hidden {
+		d = 2 * time.Second
+	}
+	return tea.Tick(d, func(t time.Time) tea.Msg { return dataMsg(t) })
 }
 
 // ---------- tmux / sway glue ----------
@@ -195,41 +208,68 @@ var optLine = regexp.MustCompile(`^(❯\s+)?[1-9]\.\s`)
 // display-message escapes control bytes into their \ooo spelling.
 const capSep = "~~dai-bar-block~~"
 
-// captureAll reads every pane in ONE tmux round-trip: a `display-message` marks
+// tmuxPoll is one round-trip's worth of tmux: what every pane is showing, which
+// clients are attached, and the shared sound flag.
+type tmuxPoll struct {
+	screens map[string]screen
+	clients []int  // client pids, for the focus rule
+	current string // the pane the first attached client is showing
+	sound   bool
+}
+
+// pollPanes reads every pane in ONE tmux round-trip: a `display-message` marks
 // where each block starts, the `capture-pane` after it carries the content.
 // Per-pane calls cost ~5ms each, which at two polls a second is real CPU for a
 // bar that is always open; batched, a poll stays two forks however many
 // sessions are up.
 //
+// The client list and the sound flag ride the same round-trip, and go FIRST:
+// tmux stops a command list at its first error, so a pane that dies mid-poll
+// truncates the tail. Losing pane blocks is already tolerated; losing the client
+// list would move the focus rule out from under the bar.
+//
 // Blocks come back in the order asked — the marker cannot carry the pane id,
 // because display-message runs its output through strftime and would eat the
-// leading %. tmux also stops a command list at its first error, so a pane that
-// dies mid-poll truncates the tail: those panes, and any that come back empty,
-// are left out of the map and keep whatever their mark says. Downgrading a
-// state on missing evidence is exactly the bug this file is fixing.
-func captureAll(panes []string) map[string]screen {
-	if len(panes) == 0 {
-		return nil
+// leading %. Panes that come back empty, or not at all, are left out of the map
+// and keep whatever their mark says. Downgrading a state on missing evidence is
+// exactly the bug this file is fixing.
+func pollPanes(panes []string) tmuxPoll {
+	args := []string{
+		"display-message", "-p", capSep, ";",
+		"list-clients", "-F", "#{client_pid}\t#{pane_id}", ";",
+		"display-message", "-p", capSep, ";",
+		"show", "-gv", "@dai_bar_sound",
 	}
-	var args []string
-	for i, p := range panes {
-		if i > 0 {
-			args = append(args, ";")
-		}
-		args = append(args, "display-message", "-p", "-t", p, capSep, ";",
-			"capture-pane", "-p", "-t", p)
+	for _, p := range panes {
+		args = append(args, ";", "display-message", "-p", "-t", p, capSep,
+			";", "capture-pane", "-p", "-t", p)
 	}
 	blocks := strings.Split(tmuxOut(args...), capSep+"\n")
-	if len(blocks) > len(panes)+1 {
-		return nil // a pane is showing our marker: bail rather than misalign
+	var poll tmuxPoll
+	if len(blocks) < 3 {
+		return poll // tmux gave us nothing usable
 	}
-	res := map[string]screen{}
-	for i, blk := range blocks[1:] {
-		if i < len(panes) && strings.TrimSpace(blk) != "" {
-			res[panes[i]] = readScreen(blk)
+	for _, ln := range strings.Split(blocks[1], "\n") {
+		f := strings.Split(strings.TrimSpace(ln), "\t")
+		if len(f) != 2 || f[0] == "" {
+			continue
+		}
+		poll.clients = append(poll.clients, atoi(f[0]))
+		if poll.current == "" {
+			poll.current = f[1]
 		}
 	}
-	return res
+	poll.sound = strings.TrimSpace(blocks[2]) == "on"
+	if len(blocks) > len(panes)+3 {
+		return poll // a pane is showing our marker: bail rather than misalign
+	}
+	poll.screens = map[string]screen{}
+	for i, blk := range blocks[3:] {
+		if i < len(panes) && strings.TrimSpace(blk) != "" {
+			poll.screens[panes[i]] = readScreen(blk)
+		}
+	}
+	return poll
 }
 
 // readScreen: is this pane working, and is a prompt up? Claude Code redraws the
@@ -328,7 +368,7 @@ func cleanName(title, path string) string {
 func atoi(s string) int     { n, _ := strconv.Atoi(s); return n }
 func atoi64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 
-func gather(permMiss map[string]int) []sess {
+func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@dai_bar_wait}", "#{@dai_bar_wait_since}", "#{pane_current_path}", "#{pane_title}",
@@ -344,7 +384,8 @@ func gather(permMiss map[string]int) []sess {
 		}
 		recs, panes = append(recs, c), append(panes, c[0])
 	}
-	screens := captureAll(panes)
+	poll := pollPanes(panes)
+	screens := poll.screens
 	now := time.Now().Unix()
 	var rows []sess
 	for _, c := range recs {
@@ -387,7 +428,7 @@ func gather(permMiss map[string]int) []sess {
 		}
 		return a.p < b.p
 	})
-	return rows
+	return rows, poll
 }
 
 func switchView(s sess) {
@@ -417,55 +458,271 @@ func swayFocusMain() {
 	}
 }
 
-// detectFocus: who holds the keyboard — the bar, or the terminal running a tmux
-// client? The second half is what separates "you are looking at this session"
-// from "it merely is the active tmux pane while you read your mail".
-func detectFocus() (bar, term bool) {
+// ---------- sway watch ----------
+
+// swayWatch holds the two compositor facts the bar needs: who has the keyboard,
+// and whether the bar's own window is on a workspace anyone is showing.
+//
+// Both used to come from a `swaymsg -t get_tree` on every poll — 58 KB of JSON
+// twice a second, serialized by sway and parsed here, to learn something that
+// changes a few times an hour. A subscription pays one read per actual change.
+// The tree poll survives only as the fallback for when the feed is down.
+type swayWatch struct {
+	mu      sync.Mutex
+	live    bool              // the subscription is up
+	known   bool              // sway has named a focused window at least once
+	app     string            // app_id of the focused window
+	pid     int               // and its pid
+	barWS   string            // workspace holding the bar's window ("" = unknown)
+	visible map[string]string // output -> the workspace it is showing
+}
+
+func newSwayWatch() *swayWatch {
+	w := &swayWatch{visible: map[string]string{}}
+	w.seed()
+	go w.run()
+	return w
+}
+
+// focus reports the cached state. live is false when the feed has not told us
+// anything yet, and the caller falls back to the tree.
+func (w *swayWatch) focus() (app string, pid int, live bool) {
+	if w == nil {
+		return "", 0, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.app, w.pid, w.live && w.known
+}
+
+// isHidden: the bar's window sits on a workspace no output is showing. Not
+// knowing answers false — the bar slows down on evidence, never on a guess.
+func (w *swayWatch) isHidden() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.barWS == "" || len(w.visible) == 0 {
+		return false
+	}
+	for _, ws := range w.visible {
+		if ws == w.barWS {
+			return false
+		}
+	}
+	return true
+}
+
+// seed establishes what the event stream can only update: who is focused right
+// now, where the bar's window lives, and which workspace each output shows.
+func (w *swayWatch) seed() {
+	if app, pid, ok := focusFromTree(); ok {
+		w.mu.Lock()
+		w.app, w.pid, w.known = app, pid, true
+		w.mu.Unlock()
+	}
+	if ws, ok := barWorkspace(); ok {
+		w.mu.Lock()
+		w.barWS = ws
+		w.mu.Unlock()
+	}
+	// get_workspaces is the only place sway reports `visible`: the workspace
+	// nodes inside get_tree leave the field null.
+	out, err := exec.Command("swaymsg", "-t", "get_workspaces").Output()
+	if err != nil {
+		return
+	}
+	var wss []struct {
+		Name, Output string
+		Visible      bool
+	}
+	if json.Unmarshal(out, &wss) != nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, ws := range wss {
+		if ws.Visible {
+			w.visible[ws.Output] = ws.Name
+		}
+	}
+}
+
+// run streams sway's event feed; `swaymsg -m` writes one JSON object per line.
+// sway restarting or the socket going away is not fatal — the tree fallback
+// covers the gap and the next attempt picks the feed back up.
+func (w *swayWatch) run() {
+	for {
+		cmd := exec.Command("swaymsg", "-t", "subscribe", "-m", `["window","workspace"]`)
+		if out, err := cmd.StdoutPipe(); err == nil && cmd.Start() == nil {
+			w.setLive(true)
+			sc := bufio.NewScanner(out)
+			sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+			for sc.Scan() {
+				w.apply(sc.Bytes())
+			}
+			_ = cmd.Wait()
+		}
+		w.setLive(false)
+		time.Sleep(2 * time.Second)
+		w.seed()
+	}
+}
+
+func (w *swayWatch) setLive(v bool) {
+	w.mu.Lock()
+	w.live = v
+	w.mu.Unlock()
+}
+
+// apply folds one event in. Window and workspace events share the change name
+// "focus" and carry no type of their own; the payload tells them apart — a
+// workspace event has `current`, a window event has `container`.
+//
+// Focusing an EMPTY workspace produces no window event, so the cached focus goes
+// stale until something is focused again. That is the one case the tree poll
+// used to get right, and it costs a wrong highlight until the next focus.
+func (w *swayWatch) apply(line []byte) {
+	var ev struct {
+		Change    string `json:"change"`
+		Container struct {
+			AppID string  `json:"app_id"`
+			PID   float64 `json:"pid"`
+		} `json:"container"`
+		Current struct {
+			Name   string `json:"name"`
+			Output string `json:"output"`
+		} `json:"current"`
+	}
+	if json.Unmarshal(line, &ev) != nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	switch {
+	case ev.Current.Name != "":
+		if ev.Change == "focus" && ev.Current.Output != "" {
+			w.visible[ev.Current.Output] = ev.Current.Name
+		}
+	case ev.Change == "focus":
+		w.app, w.pid, w.known = ev.Container.AppID, int(ev.Container.PID), true
+	case ev.Change == "move" && ev.Container.AppID == appID:
+		// the bar moved workspace and the event does not say which; stop
+		// claiming to know rather than pay a tree read to find out.
+		w.barWS = ""
+	}
+}
+
+// walkTree runs fn over every node of the sway tree, depth first.
+func walkTree(n map[string]any, fn func(map[string]any) bool) bool {
+	if fn(n) {
+		return true
+	}
+	for _, key := range []string{"nodes", "floating_nodes"} {
+		if kids, ok := n[key].([]any); ok {
+			for _, k := range kids {
+				if km, ok := k.(map[string]any); ok && walkTree(km, fn) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func swayTree() (map[string]any, bool) {
 	out, err := exec.Command("swaymsg", "-t", "get_tree").Output()
 	if err != nil {
-		return true, false
+		return nil, false
 	}
 	var tree map[string]any
 	if json.Unmarshal(out, &tree) != nil {
-		return true, false
+		return nil, false
 	}
-	var find func(n map[string]any) (map[string]any, bool)
-	find = func(n map[string]any) (map[string]any, bool) {
-		if f, _ := n["focused"].(bool); f {
-			return n, true
+	return tree, true
+}
+
+// focusFromTree: the fallback for a feed that is not up.
+func focusFromTree() (app string, pid int, ok bool) {
+	tree, got := swayTree()
+	if !got {
+		return "", 0, false
+	}
+	walkTree(tree, func(n map[string]any) bool {
+		if f, _ := n["focused"].(bool); !f {
+			return false
+		}
+		app, _ = n["app_id"].(string)
+		p, _ := n["pid"].(float64)
+		pid, ok = int(p), true
+		return true
+	})
+	return app, pid, ok
+}
+
+// barWorkspace: which workspace holds the bar's own window.
+func barWorkspace() (string, bool) {
+	tree, got := swayTree()
+	if !got {
+		return "", false
+	}
+	var ws, found string
+	var ok bool
+	var walk func(n map[string]any)
+	walk = func(n map[string]any) {
+		if ok {
+			return
+		}
+		if t, _ := n["type"].(string); t == "workspace" {
+			ws, _ = n["name"].(string)
+		}
+		if a, _ := n["app_id"].(string); a == appID {
+			found, ok = ws, true
+			return
 		}
 		for _, key := range []string{"nodes", "floating_nodes"} {
-			if kids, ok := n[key].([]any); ok {
+			if kids, has := n[key].([]any); has {
 				for _, k := range kids {
-					if km, ok := k.(map[string]any); ok {
-						if r, found := find(km); found {
-							return r, true
-						}
+					if km, is := k.(map[string]any); is {
+						walk(km)
 					}
 				}
 			}
 		}
-		return nil, false
 	}
-	if f, ok := find(tree); ok {
-		if app, _ := f["app_id"].(string); app == appID {
+	walk(tree)
+	return found, ok
+}
+
+// detectFocus: who holds the keyboard — the bar, or the terminal running a tmux
+// client? The second half is what separates "you are looking at this session"
+// from "it merely is the active tmux pane while you read your mail".
+//
+// clients are the tmux client pids the poll already brought back; walking up
+// from them used to cost a fork of its own.
+func detectFocus(w *swayWatch, clients []int) (bar, term bool) {
+	app, pid, live := w.focus()
+	if !live {
+		var ok bool
+		if app, pid, ok = focusFromTree(); !ok {
 			return true, false
 		}
-		pid, _ := f["pid"].(float64)
-		return false, hostsTmuxClient(int(pid))
 	}
-	return false, false
+	if app == appID {
+		return true, false
+	}
+	return false, hostsTmuxClient(pid, clients)
 }
 
 // hostsTmuxClient: does the window with this pid hold a tmux client? The client
 // is a grandchild of the terminal (terminal → shell → tmux), so walk up from
 // every client and see if one lands on the window.
-func hostsTmuxClient(win int) bool {
+func hostsTmuxClient(win int, clients []int) bool {
 	if win <= 1 {
 		return false
 	}
-	for _, c := range strings.Split(tmuxOut("list-clients", "-F", "#{client_pid}"), "\n") {
-		pid := atoi(strings.TrimSpace(c))
+	for _, pid := range clients {
 		for i := 0; pid > 1 && i < 12; i++ {
 			if pid == win {
 				return true
@@ -491,17 +748,6 @@ func ppidOf(pid int) int {
 		return atoi(f[1])
 	}
 	return 0
-}
-
-func detectCurrent() string {
-	for _, c := range strings.Split(tmuxOut("list-clients", "-F", "#{client_name}"), "\n") {
-		if c = strings.TrimSpace(c); c != "" {
-			if p := strings.TrimSpace(tmuxOut("display-message", "-p", "-t", c, "#{pane_id}")); p != "" {
-				return p
-			}
-		}
-	}
-	return ""
 }
 
 // ---------- text helpers ----------
@@ -596,10 +842,28 @@ const chromeRows = 6
 // mascotPad: blank rows between the mascot and the panel edge it hangs from.
 const mascotPad = 2
 
-func (m model) Init() tea.Cmd { return tea.Batch(animCmd(), dataCmd()) }
+func (m model) Init() tea.Cmd { return tea.Batch(animCmd(), dataCmd(m.hidden)) }
 
-// soundOn: is the audible alert enabled? (shared with the hook via a tmux global)
-func soundOn() bool { return strings.TrimSpace(tmuxOut("show", "-gv", "@dai_bar_sound")) == "on" }
+// moving: is anything on screen actually animating — a spinner turning, or an
+// arrival pulse counting down? When nothing is, the bar is a still image and the
+// 140ms tick only rewrote it: ~19 KB a frame, seven times a second, forever. A
+// hidden bar animates for nobody, so it does not animate at all.
+func (m model) moving() bool {
+	if m.hidden {
+		return false
+	}
+	for _, n := range m.pulse {
+		if n > 0 {
+			return true
+		}
+	}
+	for _, r := range m.rows {
+		if r.st == proc {
+			return true
+		}
+	}
+	return false
+}
 
 // toggleSound flips the shared flag; the hook reads it on the next perm/waiting.
 func (m *model) toggleSound() {
@@ -615,10 +879,12 @@ func (m *model) refresh() {
 	if m.permMiss == nil {
 		m.permMiss = map[string]int{}
 	}
-	m.rows = gather(m.permMiss)
-	m.focused, m.termFoc = detectFocus()
-	m.current = detectCurrent()
-	m.sound = soundOn()
+	var poll tmuxPoll
+	m.rows, poll = gather(m.permMiss)
+	m.focused, m.termFoc = detectFocus(m.sway, poll.clients)
+	m.current = poll.current
+	m.sound = poll.sound
+	m.hidden = m.sway.isHidden()
 	// Looking at the pane is what clears the unread green: the terminal holds
 	// the keyboard and tmux is showing that pane, so the answer is on screen.
 	if m.termFoc && m.current != "" {
@@ -700,10 +966,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pulse[p] = n - 1
 			}
 		}
+		if !m.moving() {
+			m.anim = false // gone still; the next dataMsg starts the tick again
+			return m, nil
+		}
 		return m, animCmd()
 	case dataMsg:
 		m.refresh()
-		return m, dataCmd()
+		if !m.anim && m.moving() {
+			m.anim = true
+			return m, tea.Batch(dataCmd(m.hidden), animCmd())
+		}
+		return m, dataCmd(m.hidden)
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.recomputeDensity()
@@ -1314,8 +1588,9 @@ func main() {
 		"lay the bar out top-down: counters and sessions at the top, mascot at the bottom")
 	flag.Parse()
 
-	m := model{top: *top}
+	m := model{top: *top, sway: newSwayWatch()}
 	m.refresh()
+	m.anim = true // Init starts the tick; the first animMsg decides if it lives
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	fm, err := p.Run()
 	if err != nil {
