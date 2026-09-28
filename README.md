@@ -71,8 +71,10 @@ see [contrib/README.md](contrib/README.md).
 ## Install
 
 ```sh
-go install github.com/daronco/ermahgherdr@latest
+go install github.com/daronco/ermahgherdr/cmd/erma@latest
 ```
+
+From a checkout: `go build -o erma ./cmd/erma`.
 
 The binary is `erma`. Run it in a terminal you keep on the side. A helper that
 opens-or-focuses it in a tagged sway window is in
