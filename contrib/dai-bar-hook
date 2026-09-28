@@ -12,7 +12,7 @@
 #
 # Driven by Claude Code hooks (see ~/.claude/settings.json):
 #   stop   -> done      (Stop hook: finished a response)
-#   notify -> perm|done (Notification hook: parses the message)
+#   notify -> perm|done (Notification hook: by notification_type)
 #   submit -> working   (UserPromptSubmit: you sent input, now processing)
 #
 # Anchors on $TMUX_PANE so it targets the right pane regardless of focus.
@@ -22,22 +22,25 @@ action="${1:-}"
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
 p="$TMUX_PANE"
 
+cur="$(tmux show -p -t "$p" -v @dai_bar_wait 2>/dev/null || true)"
+
 new=""
 case "$action" in
   stop)   new="done" ;;
   submit) new="working" ;;
   notify)
-    # Notification fires for permission prompts AND idle waits. Distinguish by
-    # the message text on stdin (raw JSON grep is enough and robust).
+    # Only two types speak for this pane (raw JSON grep is enough). idle_prompt
+    # comes 60s after a turn ends; it means "finished" only if no Stop hook said
+    # so — otherwise it re-pinged, and re-greened, an answer already read.
     msg="$(cat 2>/dev/null || true)"
     case "$msg" in
-      *permission*|*Permission*) new="perm" ;;
-      *)                         new="done" ;;
+      *'permission_prompt"'*) new="perm" ;;
+      *'"idle_prompt"'*)      [[ "$cur" == "working" ]] || exit 0; new="done" ;;
+      *)                      exit 0 ;;
     esac ;;
   *) exit 0 ;;
 esac
 
-cur="$(tmux show -p -t "$p" -v @dai_bar_wait 2>/dev/null || true)"
 [[ "$cur" == "$new" ]] && exit 0   # no change -> no repaint
 
 tmux set -p -t "$p" @dai_bar_wait "$new" 2>/dev/null || true
