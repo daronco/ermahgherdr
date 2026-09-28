@@ -13,6 +13,9 @@
 //	amber = processing (moving)     · spine + braille spinner
 //	gray  = idle (the many)         · no spine + static ○
 //
+// violet sits beside the status and never replaces it: ◔N% = context about to be
+// auto-compacted (published by contrib/dai-bar-ctx only while it is low).
+//
 // cyan means only "you": selection band ▐, current-session arrow ▸, focused count.
 package main
 
@@ -42,6 +45,7 @@ var (
 	cUrgent   = lipgloss.Color("#e05b57")
 	cDone     = lipgloss.Color("#63c07a")
 	cAmber    = lipgloss.Color("#e8a33d")
+	cCtx      = lipgloss.Color("#b392f0")
 	bgUrgent  = lipgloss.Color("#2b1e1e")
 	bgBoth    = lipgloss.Color("#3a2a2a")
 	bgDone    = lipgloss.Color("#1d2721")
@@ -139,6 +143,7 @@ type sess struct {
 	mark                string // the pane option, verbatim — "unread" resists auto-read
 	st                  state
 	since               int64
+	ctx                 string // @dai_ctx_left: % left before auto-compact, set only while low
 	s, w, p             int
 }
 
@@ -175,11 +180,11 @@ type model struct {
 // itemKey is every input renderItem reads. glyph, meta and age are pre-resolved
 // because they are what fold m.frame, m.pulse and the clock into a row.
 type itemKey struct {
-	pane, name, glyph, meta, age string
-	glyphCol                     lipgloss.Color
-	st                           state
-	win, rowW, nameW             int
-	sel, cur, comp               bool
+	pane, name, glyph, meta, age, ctx string
+	glyphCol                          lipgloss.Color
+	st                                state
+	win, rowW, nameW                  int
+	sel, cur, comp                    bool
 }
 
 // cacheCap: the age text ticks every second, so keys churn. Dropping the whole
@@ -195,7 +200,7 @@ func (m model) itemLines(it sess, idx int, th theme) string {
 	g, gc := m.glyphRune(it, th)
 	k := itemKey{
 		pane: it.pane, name: it.name, glyph: g, glyphCol: gc,
-		meta: metaLine(it), age: fmtAge(it.since), st: it.st,
+		meta: metaLine(it), age: fmtAge(it.since), ctx: it.ctx, st: it.st,
 		win: it.w, rowW: m.rowW(), nameW: m.nameW(),
 		sel: idx == m.sel, cur: it.pane == m.current, comp: m.comp,
 	}
@@ -449,14 +454,14 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@dai_bar_wait}", "#{@dai_bar_wait_since}", "#{pane_current_path}", "#{pane_title}",
-		"#{@ctx_label}",
+		"#{@ctx_label}", "#{@dai_ctx_left}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var recs [][]string
 	var panes []string
 	for _, line := range strings.Split(out, "\n") {
 		c := strings.Split(line, "\t")
-		if len(c) < 9 || c[0] == "" {
+		if len(c) < 10 || c[0] == "" {
 			continue
 		}
 		recs, panes = append(recs, c), append(panes, c[0])
@@ -491,7 +496,7 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 		}
 		rows = append(rows, sess{
 			pane: c[0], sessWin: c[1] + ":" + c[2], name: name,
-			mark: wait, st: st, since: since,
+			mark: wait, st: st, since: since, ctx: strings.TrimSpace(c[9]),
 			s: atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
 		})
 	}
@@ -1288,6 +1293,15 @@ func metaLine(it sess) string {
 	}
 	return tag + " · " + age
 }
+
+// ctxTag: the low-context mark, or "" while there is room. <= 4 cells, so it fits
+// the compact row's age slot.
+func ctxTag(it sess) string {
+	if it.ctx == "" {
+		return ""
+	}
+	return "◔" + it.ctx + "%"
+}
 func rowBg(it sess, sel bool, th theme) lipgloss.Color {
 	switch {
 	case it.st == urgent && sel:
@@ -1326,14 +1340,17 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		// over made lipgloss wrap the row onto a second line.
 		nwC := max(4, m.rowW()-5-1-4-1)
 		nm := midTruncate(strings.ToLower(it.name), nwC)
-		age := padL(fmtAge(it.since), 4)
+		age, agec := padL(fmtAge(it.since), 4), metaColorOf(it, sel, th)
+		if tag := ctxTag(it); tag != "" { // running out of room beats how long it has sat
+			age, agec = padL(tag, 4), cCtx
+		}
 		arrow := c(rbg, " ", false)
 		if it.pane == m.current {
 			arrow = c(th.focus, "➤", false)
 		}
 		line := band + spine + c(rbg, " ", false) + c(gc, gg, false) + c(rbg, " ", false) +
 			c(nc, padR(nm, nwC), bold) + c(rbg, " ", false) +
-			c(metaColorOf(it, sel, th), age, false) + arrow
+			c(agec, age, false) + arrow
 		return lipgloss.NewStyle().Width(m.rowW()).Background(rbg).Render(line)
 	}
 
@@ -1346,9 +1363,12 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		}
 		lines = append(lines, band+spine+c(rbg, " ", false)+glyph+c(nc, padR(nm, nw), bold))
 	}
-	// second line: the time (gutter cols 3-5 empty)
+	// second line: the time (gutter cols 3-5 empty), and the low-context mark
+	// right-aligned under the name
+	tag := ctxTag(it)
+	mw := max(0, nw-utf8.RuneCountInString(tag))
 	lines = append(lines, band+spine+c(rbg, "   ", false)+
-		c(metaColorOf(it, sel, th), padR(metaLine(it), nw), false))
+		c(metaColorOf(it, sel, th), padR(metaLine(it), mw), false)+c(cCtx, tag, true))
 
 	// right column (2 cells): the tmux window # as a dark badge on line 0, and
 	// the current-session arrow ▸ just below it (line 1) when applicable.

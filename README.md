@@ -39,6 +39,11 @@ to keep asking. That mark is pinned — unlike the automatic green it survives t
 pane being right there in front of you, and only a deliberate jump, or the
 session doing something new, clears it.
 
+A violet **◔N%** under the name means that session is about to be auto-compacted:
+only N% of the context is left. It sits beside the status color, never instead of
+it, and shows up only while the session is low (≤ 15% by default) — see the
+context segment below.
+
 Cyan means only *you*: the selection band, the current-session arrow, and the
 focused-header underline. When the bar has keyboard focus the little 👾 at the
 bottom raises its hands.
@@ -93,6 +98,18 @@ adds on top is the part the screen can't show: that a stopped session is
 
 So without the hook the bar still gets 🟡 and ⚪ right — it just can't tell 🔴
 and 🟢 apart from a session sitting quietly.
+
+## Context segment (optional)
+
+Claude Code warns about auto-compaction only 20k tokens ahead — 2% of a 1M
+window. [`contrib/dai-bar-ctx`](contrib/dai-bar-ctx) is a `statusLine` command
+that prints the same "% until auto-compact" number on every render and, once it
+drops to `DAI_CTX_WARN` (default 15), publishes it for the bar and plays its own
+sound:
+
+```json
+{ "statusLine": { "type": "command", "command": "/path/to/dai-bar-ctx" } }
+```
 
 ## sway integration (optional)
 

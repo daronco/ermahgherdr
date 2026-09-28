@@ -154,6 +154,7 @@ func TestRowsFitWidth(t *testing.T) {
 	rows := []sess{
 		{pane: "%1", name: "dados financeiros no bigquery", st: idle, w: 6, since: 1},
 		{pane: "%2", name: "abel", st: urgent, w: 12, since: 1},
+		{pane: "%3", name: "dai/compact-warn", st: done, w: 3, since: 1, ctx: "12"},
 	}
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
@@ -306,5 +307,23 @@ func TestItemCacheFollowsSpinner(t *testing.T) {
 	}
 	if len(seen) != len(spinnerFrames) {
 		t.Errorf("spinner rendeu %d quadros distintos, esperava %d", len(seen), len(spinnerFrames))
+	}
+}
+
+// The low-context mark rides the same cached row, so ctx has to be part of the
+// key: a session crossing the threshold would otherwise keep its old picture.
+func TestCtxTagShownAndCached(t *testing.T) {
+	th := themeFor(false)
+	for _, comp := range []bool{false, true} {
+		m := model{w: 38, h: 44, sel: -1, comp: comp,
+			pulse: map[string]int{}, icache: map[itemKey]string{}}
+		it := sess{pane: "%7", name: "dai/compact-warn", st: idle, w: 3, since: 1}
+		if got := m.itemLines(it, 0, th); strings.Contains(got, "◔") {
+			t.Errorf("comp=%v: plenty of context, no mark expected", comp)
+		}
+		it.ctx = "12"
+		if got := m.itemLines(it, 0, th); !strings.Contains(got, "◔12%") {
+			t.Errorf("comp=%v: ctx=12 should show ◔12%%", comp)
+		}
 	}
 }

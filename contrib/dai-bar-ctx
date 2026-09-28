@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Claude Code statusLine segment: how much context is left before auto-compact.
+#
+# Claude Code's own warning shows up a fixed 20k tokens before it compacts — on a
+# 1M window that is 2% of it, far too late to wrap a session up. This prints the
+# same "% until auto-compact" number on every render, and publishes it as the
+# pane option @dai_ctx_left while it is at or under DAI_CTX_WARN (default 15):
+# dai-bar shows it, and the crossing plays its own sound.
+#
+# Usage in ~/.claude/settings.json (or from a wrapper that joins other segments):
+#   "statusLine": { "type": "command", "command": "/path/to/dai-bar-ctx" }
+#
+# Needs jq. tmux is optional: outside it, only the segment is printed.
+set -euo pipefail
+
+warn="${DAI_CTX_WARN:-15}"
+
+# Mirrors Claude Code 2.1.284: the window minus 20k kept for output, minus a 13k
+# buffer. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only move that point earlier.
+left="$(jq -r --arg ovr "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" '
+  .context_window as $c
+  | if $c.used_percentage == null or ($c.context_window_size // 0) <= 33000 then empty else
+      ($c.context_window_size - 20000) as $eff
+      | (($ovr | tonumber?) // 0) as $o
+      | (if $o > 0 and $o <= 100 then [($eff * $o / 100 | floor), $eff - 13000] | min
+         else $eff - 13000 end) as $thr
+      | (($thr - $c.total_input_tokens) / $thr * 100 | round) as $l
+      | if $l < 0 then 0 else $l end
+    end' 2>/dev/null || true)"
+
+new=""
+if [[ -n "$left" ]]; then
+  if (( left <= warn )); then
+    new="$left"
+    printf '\033[1;38;5;141mctx %s%% left\033[0m' "$left"
+  else
+    printf '\033[38;5;244mctx %s%% left\033[0m' "$left"
+  fi
+fi
+
+[[ -n "${TMUX_PANE:-}" ]] || exit 0
+p="$TMUX_PANE"
+
+cur="$(tmux show -p -t "$p" -v @dai_ctx_left 2>/dev/null || true)"
+[[ "$cur" == "$new" ]] && exit 0   # no change -> no tmux write
+
+if [[ -n "$new" ]]; then
+  tmux set -p -t "$p" @dai_ctx_left "$new" 2>/dev/null || true
+else
+  tmux set -p -u -t "$p" @dai_ctx_left 2>/dev/null || true
+fi
+
+# One ping per crossing: only the step from "plenty" to "low". A compact puts the
+# option back to unset, so the next session running low pings again.
+[[ -z "$cur" && -n "$new" ]] || exit 0
+snd="${DAI_BAR_SOUND_CTX:-/usr/share/sounds/freedesktop/stereo/phone-outgoing-busy.oga}"
+gate="$(tmux show -gv @dai_bar_sound 2>/dev/null || true)"
+if [[ "$gate" == "on" && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then
+  paplay "$snd" >/dev/null 2>&1 &
+fi
