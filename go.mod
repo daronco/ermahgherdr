@@ -1,4 +1,4 @@
-module github.com/daronco/dai-bar
+module github.com/daronco/ermahgherdr
 
 go 1.24.0
 
