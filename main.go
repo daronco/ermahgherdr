@@ -1,4 +1,4 @@
-// erdr — slim status sidebar of claude tmux sessions (Bubble Tea).
+// erma — slim status sidebar of claude tmux sessions (Bubble Tea).
 //
 // Each session is a TWO-LINE block — name on
 // top, time below — with a fixed 5-col meter repeated on both lines and the
@@ -14,7 +14,7 @@
 //	gray  = idle (the many)         · no spine + static ○
 //
 // violet sits beside the status and never replaces it: ◔N% = context about to be
-// auto-compacted (published by contrib/erdr-ctx only while it is low).
+// auto-compacted (published by contrib/erma-ctx only while it is low).
 //
 // cyan means only "you": selection band ▐, current-session arrow ▸, focused count.
 package main
@@ -93,7 +93,7 @@ var borderGray = lipgloss.Color("#3a3a3a")
 
 // appID: the sway app_id the launcher tags the bar's window with. Used to tell
 // whether the bar itself is the focused sway window (see detectFocus).
-const appID = "erdr"
+const appID = "erma"
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"}
 
@@ -143,7 +143,7 @@ type sess struct {
 	mark                string // the pane option, verbatim — "unread" resists auto-read
 	st                  state
 	since               int64
-	ctx                 string // @erdr_ctx_left: % left before auto-compact, set only while low
+	ctx                 string // @erma_ctx_left: % left before auto-compact, set only while low
 	s, w, p             int
 }
 
@@ -161,7 +161,7 @@ type model struct {
 	permMiss map[string]int // consecutive polls a "perm" mark went uncorroborated
 	top      bool           // lay out top-down (the --top flag) instead of bottom-up
 	comp     bool           // compact (geometry-based, with 1-item hysteresis)
-	sound    bool           // audible alerts on (mirrors tmux global @erdr_sound)
+	sound    bool           // audible alerts on (mirrors tmux global @erma_sound)
 	sway     *swayWatch     // the compositor feed: who has focus, are we on screen
 	hidden   bool           // the bar's window is on a workspace nobody is showing
 	anim     bool           // the animation tick is running (see moving)
@@ -288,7 +288,7 @@ var optLine = regexp.MustCompile(`^(❯\s+)?[1-9]\.\s`)
 
 // capSep marks a block boundary in the batched capture. Printable on purpose:
 // display-message escapes control bytes into their \ooo spelling.
-const capSep = "~~erdr-block~~"
+const capSep = "~~erma-block~~"
 
 // tmuxPoll is one round-trip's worth of tmux: what every pane is showing, which
 // clients are attached, and the shared sound flag.
@@ -320,7 +320,7 @@ func pollPanes(panes []string) tmuxPoll {
 		"display-message", "-p", capSep, ";",
 		"list-clients", "-F", "#{client_pid}\t#{pane_id}", ";",
 		"display-message", "-p", capSep, ";",
-		"show", "-gv", "@erdr_sound",
+		"show", "-gv", "@erma_sound",
 	}
 	for _, p := range panes {
 		args = append(args, ";", "display-message", "-p", "-t", p, capSep,
@@ -420,7 +420,7 @@ func permAlive(sc screen, seen bool, age int64, misses int) bool {
 // markRead clears the unread green. It goes to the pane option so it outlives a
 // restart of the bar and so the hook sees it on its next transition.
 func markRead(pane string) {
-	run("tmux", "set", "-p", "-t", pane, "@erdr_wait", "waiting")
+	run("tmux", "set", "-p", "-t", pane, "@erma_wait", "waiting")
 }
 
 // markUnread puts the green back by hand — you read it, and you want it to keep
@@ -428,7 +428,7 @@ func markRead(pane string) {
 // you are staring at while you press u would be auto-read again on the next
 // poll; only a deliberate jump (or the session doing something new) clears it.
 func markUnread(pane string) {
-	run("tmux", "set", "-p", "-t", pane, "@erdr_wait", "unread")
+	run("tmux", "set", "-p", "-t", pane, "@erma_wait", "unread")
 }
 
 func cleanName(title, path string) string {
@@ -453,8 +453,8 @@ func atoi64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
-		"#{@erdr_wait}", "#{@erdr_wait_since}", "#{pane_current_path}", "#{pane_title}",
-		"#{@ctx_label}", "#{@erdr_ctx_left}",
+		"#{@erma_wait}", "#{@erma_wait_since}", "#{pane_current_path}", "#{pane_title}",
+		"#{@ctx_label}", "#{@erma_ctx_left}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var recs [][]string
@@ -486,7 +486,7 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 		// against the state we are actually showing — and does not ping for a
 		// "finished" it thinks is new.
 		if seen && st == done && c[4] != "done" && c[4] != "unread" {
-			run("tmux", "set", "-p", "-t", c[0], "@erdr_wait", "done")
+			run("tmux", "set", "-p", "-t", c[0], "@erma_wait", "done")
 		}
 		// @ctx_label, when something outside sets it, is the same short label the
 		// tmux tab shows — the bar and the tab should not disagree about a session.
@@ -533,7 +533,7 @@ func swayFocusMain() {
 	if rt == "" {
 		rt = "/tmp"
 	}
-	if b, err := os.ReadFile(filepath.Join(rt, "erdr-last-term")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(rt, "erma-last-term")); err == nil {
 		if cid := strings.TrimSpace(string(b)); cid != "" {
 			run("swaymsg", fmt.Sprintf("[con_id=%s] focus", cid))
 		}
@@ -954,7 +954,7 @@ func (m *model) toggleSound() {
 	if m.sound {
 		v = "on"
 	}
-	run("tmux", "set", "-g", "@erdr_sound", v)
+	run("tmux", "set", "-g", "@erma_sound", v)
 }
 
 func (m *model) refresh() {

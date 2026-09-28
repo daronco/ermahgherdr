@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Track the live status of the `claude` session running in this tmux pane, so
-# erdr can list EVERY session and its state at a glance. The pane stays
+# erma can list EVERY session and its state at a glance. The pane stays
 # listed the whole time claude runs; only the status changes.
 #
-# erdr finds the panes on its own (pane_current_command == claude); this
-# script only maintains the pane option @erdr_wait with the detailed state:
+# erma finds the panes on its own (pane_current_command == claude); this
+# script only maintains the pane option @erma_wait with the detailed state:
 #   perm     needs your authorization (permission prompt)  -> urgent, top
 #   done     finished, and you have not looked yet         -> your turn
 #   working  processing (you just submitted, or booting)    -> no action
-#   waiting  seen — written by erdr when you look at the pane, never here
+#   waiting  seen — written by erma when you look at the pane, never here
 #
 # Driven by Claude Code hooks (see ~/.claude/settings.json):
 #   stop   -> done      (Stop hook: finished a response)
@@ -22,7 +22,7 @@ action="${1:-}"
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
 p="$TMUX_PANE"
 
-cur="$(tmux show -p -t "$p" -v @erdr_wait 2>/dev/null || true)"
+cur="$(tmux show -p -t "$p" -v @erma_wait 2>/dev/null || true)"
 
 new=""
 case "$action" in
@@ -43,23 +43,23 @@ esac
 
 [[ "$cur" == "$new" ]] && exit 0   # no change -> no repaint
 
-tmux set -p -t "$p" @erdr_wait "$new" 2>/dev/null || true
-tmux set -p -t "$p" @erdr_wait_since "$(date +%s)" 2>/dev/null || true
+tmux set -p -t "$p" @erma_wait "$new" 2>/dev/null || true
+tmux set -p -t "$p" @erma_wait_since "$(date +%s)" 2>/dev/null || true
 tmux refresh-client -S 2>/dev/null || true
 
 # Audible ping on the transitions that want your attention (guarded above, so
 # only on the actual state change), async so it never blocks the hook:
 #   perm -> needs your authorization  (urgent)
 #   done -> finished, your turn       (softer, "maybe continue")
-# Both gated by the tmux global @erdr_sound, toggled from the erdr UI
-# (the ♫ chip). Override the files with ERDR_SOUND_PERM / ERDR_SOUND_DONE.
+# Both gated by the tmux global @erma_sound, toggled from the erma UI
+# (the ♫ chip). Override the files with ERMA_SOUND_PERM / ERMA_SOUND_DONE.
 snd=""
 case "$new" in
-  perm) snd="${ERDR_SOUND_PERM:-/usr/share/sounds/freedesktop/stereo/complete.oga}" ;;
-  done) snd="${ERDR_SOUND_DONE:-/usr/share/sounds/freedesktop/stereo/bell.oga}" ;;
+  perm) snd="${ERMA_SOUND_PERM:-/usr/share/sounds/freedesktop/stereo/complete.oga}" ;;
+  done) snd="${ERMA_SOUND_DONE:-/usr/share/sounds/freedesktop/stereo/bell.oga}" ;;
 esac
 if [[ -n "$snd" ]]; then
-  gate="$(tmux show -gv @erdr_sound 2>/dev/null || true)"
+  gate="$(tmux show -gv @erma_sound 2>/dev/null || true)"
   if [[ "$gate" == "on" && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then
     paplay "$snd" >/dev/null 2>&1 &
   fi

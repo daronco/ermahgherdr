@@ -4,16 +4,16 @@
 # Claude Code's own warning shows up a fixed 20k tokens before it compacts — on a
 # 1M window that is 2% of it, far too late to wrap a session up. This prints the
 # same "% until auto-compact" number on every render, and publishes it as the
-# pane option @erdr_ctx_left while it is at or under ERDR_CTX_WARN (default 15):
-# erdr shows it, and the crossing plays its own sound.
+# pane option @erma_ctx_left while it is at or under ERMA_CTX_WARN (default 15):
+# erma shows it, and the crossing plays its own sound.
 #
 # Usage in ~/.claude/settings.json (or from a wrapper that joins other segments):
-#   "statusLine": { "type": "command", "command": "/path/to/erdr-ctx" }
+#   "statusLine": { "type": "command", "command": "/path/to/erma-ctx" }
 #
 # Needs jq. tmux is optional: outside it, only the segment is printed.
 set -euo pipefail
 
-warn="${ERDR_CTX_WARN:-15}"
+warn="${ERMA_CTX_WARN:-15}"
 
 # Mirrors Claude Code 2.1.284: the window minus 20k kept for output, minus a 13k
 # buffer. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only move that point earlier.
@@ -41,20 +41,20 @@ fi
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
 p="$TMUX_PANE"
 
-cur="$(tmux show -p -t "$p" -v @erdr_ctx_left 2>/dev/null || true)"
+cur="$(tmux show -p -t "$p" -v @erma_ctx_left 2>/dev/null || true)"
 [[ "$cur" == "$new" ]] && exit 0   # no change -> no tmux write
 
 if [[ -n "$new" ]]; then
-  tmux set -p -t "$p" @erdr_ctx_left "$new" 2>/dev/null || true
+  tmux set -p -t "$p" @erma_ctx_left "$new" 2>/dev/null || true
 else
-  tmux set -p -u -t "$p" @erdr_ctx_left 2>/dev/null || true
+  tmux set -p -u -t "$p" @erma_ctx_left 2>/dev/null || true
 fi
 
 # One ping per crossing: only the step from "plenty" to "low". A compact puts the
 # option back to unset, so the next session running low pings again.
 [[ -z "$cur" && -n "$new" ]] || exit 0
-snd="${ERDR_SOUND_CTX:-/usr/share/sounds/freedesktop/stereo/phone-outgoing-busy.oga}"
-gate="$(tmux show -gv @erdr_sound 2>/dev/null || true)"
+snd="${ERMA_SOUND_CTX:-/usr/share/sounds/freedesktop/stereo/phone-outgoing-busy.oga}"
+gate="$(tmux show -gv @erma_sound 2>/dev/null || true)"
 if [[ "$gate" == "on" && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then
   paplay "$snd" >/dev/null 2>&1 &
 fi

@@ -4,11 +4,11 @@
 Two jobs, one focus-event subscription:
   1. Fade every unfocused window a touch so it's obvious which one is active
      (sway has no native inactive-dimming). Tune with SWAY_INACTIVE_OPACITY.
-  2. Record the con_id of the last focused window that ISN'T erdr, to a state
-     file. erdr's "jump" mode reads it to hand keyboard focus back to your
+  2. Record the con_id of the last focused window that ISN'T erma, to a state
+     file. erma's "jump" mode reads it to hand keyboard focus back to your
      main terminal after teleporting the tmux view.
 
-Launch from sway:  exec erdr-sway-focus
+Launch from sway:  exec erma-sway-focus
 Raw swaymsg (no i3ipc dependency).
 """
 import json
@@ -16,9 +16,9 @@ import os
 import subprocess
 
 DIM = float(os.environ.get("SWAY_INACTIVE_OPACITY", "1.0"))  # 1.0 = no dimming
-BAR_APP_ID = os.environ.get("ERDR_APP_ID", "erdr")
+BAR_APP_ID = os.environ.get("ERMA_APP_ID", "erma")
 STATE = os.path.join(
-    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "erdr-last-term"
+    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "erma-last-term"
 )
 
 
@@ -46,7 +46,7 @@ def leaves(node):
 
 
 def record(con):
-    if not is_bar(con):      # never record an erdr window as the focus target
+    if not is_bar(con):      # never record an erma window as the focus target
         try:
             with open(STATE, "w") as f:
                 f.write(str(con["id"]))
@@ -55,13 +55,13 @@ def record(con):
 
 
 def is_bar(con):
-    # prefix match, so any erdr window (e.g. a second, tagged one) is excluded
+    # prefix match, so any erma window (e.g. a second, tagged one) is excluded
     # from being recorded as the "last real terminal" that focus returns to.
     return (con.get("app_id") or "").startswith(BAR_APP_ID)
 
 
 def dim_level(con):
-    # never dim erdr: it's a monitor, must stay readable while unfocused
+    # never dim erma: it's a monitor, must stay readable while unfocused
     return 1.0 if is_bar(con) else DIM
 
 
@@ -109,7 +109,7 @@ def main():
                 if prev and prev.get("id") != cid:
                     opacity(prev["id"], dim_level(prev))
             prev = con
-            record(con)   # always track last terminal (used by erdr jump mode)
+            record(con)   # always track last terminal (used by erma jump mode)
 
 
 if __name__ == "__main__":
