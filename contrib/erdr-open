@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Open dai-bar in a foot window, or focus it if already open.
+# Open erdr in a foot window, or focus it if already open.
 # Tags the window with a stable app_id so sway can size/find it and the
 # focus daemon can tell it apart from real terminals.
 set -euo pipefail
-APP="${DAI_BAR_APP_ID:-dai-bar}"
+APP="${ERDR_APP_ID:-erdr}"
 # capture the tree first: piping into `grep -q` can SIGPIPE swaymsg, which with
 # `pipefail` would flakily read as "not found" and open a duplicate window.
 tree="$(swaymsg -t get_tree 2>/dev/null || true)"
@@ -14,10 +14,10 @@ fi
 # resolve an absolute binary path (the terminal inherits sway's env, not your
 # shell PATH), preferring where `go install` drops it.
 BIN=""
-for c in "$HOME/go/bin/dai-bar" "$HOME/.local/bin/dai-bar" "$HOME/.dotfiles/bin/dai-bar"; do
+for c in "$HOME/go/bin/erdr" "$HOME/.local/bin/erdr" "$HOME/.dotfiles/bin/erdr"; do
   [ -x "$c" ] && { BIN="$c"; break; }
 done
-[ -z "$BIN" ] && BIN="$(command -v dai-bar 2>/dev/null || echo dai-bar)"
-# foot by default. Another terminal: set DAI_BAR_TERMINAL — but check how it
+[ -z "$BIN" ] && BIN="$(command -v erdr 2>/dev/null || echo erdr)"
+# foot by default. Another terminal: set ERDR_TERMINAL — but check how it
 # spells the window tag first (alacritty/kitty use --class, not --app-id).
-exec "${DAI_BAR_TERMINAL:-foot}" --app-id="${APP}" -e "$BIN" "$@"
+exec "${ERDR_TERMINAL:-foot}" --app-id="${APP}" -e "$BIN" "$@"
