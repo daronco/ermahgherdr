@@ -14,7 +14,7 @@ fi
 # resolve an absolute binary path (the terminal inherits sway's env, not your
 # shell PATH), preferring where `go install` drops it.
 BIN=""
-for c in "$HOME/go/bin/erma" "$HOME/.local/bin/erma" "$HOME/.dotfiles/bin/erma"; do
+for c in "$HOME/go/bin/erma" "$HOME/.local/bin/erma"; do
   [ -x "$c" ] && { BIN="$c"; break; }
 done
 [ -z "$BIN" ] && BIN="$(command -v erma 2>/dev/null || echo erma)"
