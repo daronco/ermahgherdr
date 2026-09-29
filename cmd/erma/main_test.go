@@ -316,7 +316,7 @@ func TestItemCacheFollowsSpinner(t *testing.T) {
 func TestCtxShownAndCached(t *testing.T) {
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
-		want := ctxCellFull // the meter
+		want := string(ctxCellFull) // the meter
 		if comp {
 			want = "◔88%"
 		}
@@ -348,16 +348,24 @@ func TestCtxTagOnlyWhenLow(t *testing.T) {
 
 // The meter fills from the used end and never overflows its cells.
 func TestCtxMeterWidth(t *testing.T) {
+	spent := func(cells []rune) int {
+		n := 0
+		for _, r := range cells {
+			if r != ctxCellTrack {
+				n++
+			}
+		}
+		return n
+	}
 	for _, used := range []int{0, 1, 42, 75, 99, 100} {
-		fill, track := ctxMeter(used, 12)
-		if got := lipgloss.Width(fill + track); got != 12 {
+		if got := lipgloss.Width(string(ctxMeter(used, 12))); got != 12 {
 			t.Errorf("used=%d: meter is %d cells, want 12", used, got)
 		}
 	}
-	if fill, _ := ctxMeter(0, 12); fill != "" {
-		t.Errorf("used=0 should draw no fill, got %q", fill)
+	if n := spent(ctxMeter(0, 12)); n != 0 {
+		t.Errorf("used=0 should draw no fill, got %d cells", n)
 	}
-	if _, track := ctxMeter(100, 12); track != "" {
-		t.Errorf("used=100 should leave no track, got %q", track)
+	if n := spent(ctxMeter(100, 12)); n != 12 {
+		t.Errorf("used=100 should fill every cell, got %d", n)
 	}
 }

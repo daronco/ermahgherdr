@@ -1331,16 +1331,15 @@ func ctxUsed(it sess) int {
 // is actually burning through its window. The resting color is the same
 // whatever the session's state — this meter reports context, not status, and
 // tinting it green on a finished session would say otherwise.
-// ctxTrackFor: the unspent rail, one step up from whatever the row sits on. A
-// fixed gray was muddy on the tinted rows — green, red and the cyan selection
-// are all lighter than it was. Only the rail follows the row; the spent part
-// carries a meaning of its own and must not change with the background.
-func ctxTrackFor(rbg lipgloss.Color) lipgloss.Color {
+// ctxShade: a row background stepped toward the foreground, keeping its tint.
+// The rail and its marks sit on six different row colors, and a fixed gray read
+// muddy on the tinted ones. Only these follow the row; the spent part carries a
+// meaning of its own and must not change with the background.
+func ctxShade(rbg lipgloss.Color, step int) lipgloss.Color {
 	var r, g, b int
 	if _, err := fmt.Sscanf(string(rbg), "#%02x%02x%02x", &r, &g, &b); err != nil {
 		return rbg
 	}
-	const step = 0x16
 	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x",
 		min(r+step, 0xff), min(g+step, 0xff), min(b+step, 0xff)))
 }
@@ -1360,25 +1359,46 @@ func ctxColor(used int, th theme) lipgloss.Color {
 // is a half-block, the track a thin rule; the quadrant carries the odd half, so
 // the meter still moves at ~3% on a row this wide.
 const (
-	ctxCellFull  = "\u2584"
-	ctxCellHalf  = "\u2596"
-	ctxCellTrack = "\u2581"
+	ctxCellFull  = '\u2584'
+	ctxCellHalf  = '\u2596'
+	ctxCellTrack = '\u2581'
 )
 
-// ctxMeter splits the meter into what is spent and the track behind it, so the
-// two can carry different colors.
-func ctxMeter(used, cells int) (fill, track string) {
+// ctxMeter: one rune per cell — what is spent, then the rail behind it. The
+// caller paints and slices it, because until the warning the meter runs across
+// both columns of the row. The rail is deliberately featureless: marks for the
+// thresholds were tried and read as an alarm on a row that should not raise
+// its voice before it has something to say.
+func ctxMeter(used, cells int) []rune {
 	if cells < 1 {
-		return "", ""
+		return nil
 	}
 	halves := used * cells * 2 / 100
 	full := min(halves/2, cells)
-	fill = strings.Repeat(ctxCellFull, full)
+	out := make([]rune, 0, cells)
+	for range full {
+		out = append(out, ctxCellFull)
+	}
 	if halves%2 == 1 && full < cells {
-		fill += ctxCellHalf
+		out = append(out, ctxCellHalf)
 		full++
 	}
-	return fill, strings.Repeat(ctxCellTrack, cells-full)
+	for range cells - full {
+		out = append(out, ctxCellTrack)
+	}
+	return out
+}
+
+// ctxPaint colors a slice of the meter in two runs, so a row costs two color
+// resolutions instead of one per cell.
+func ctxPaint(cells []rune, spent, rail lipgloss.Color,
+	c func(lipgloss.Color, string, bool) string,
+) string {
+	i := 0
+	for i < len(cells) && cells[i] != ctxCellTrack {
+		i++
+	}
+	return c(spent, string(cells[:i]), false) + c(rail, string(cells[i:]), false)
 }
 
 func rowBg(it sess, sel bool, th theme) lipgloss.Color {
@@ -1448,28 +1468,33 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 	lines = append(lines, band+spine+c(rbg, "   ", false)+
 		c(metaColorOf(it, sel, th), padR(metaLine(it), nw), false))
 
-	// third line: the context meter, spanning the name column exactly. Its number
-	// goes in the right column instead, on the badge's own grid — see the loop
-	// below. Absent until the pane's statusline has published a figure.
-	meterRow, meterPct := -1, ""
+	// third line: the context meter. Until the warning it runs the whole row,
+	// because a slot held open for a number nobody is reading yet reads as a
+	// hole. From there the number takes the tail, on the badge's own grid — see
+	// the right-column loop below. Absent until the pane's statusline has
+	// published a figure.
+	meterRow, meterTail := -1, ""
 	if used := ctxUsed(it); used >= 0 {
-		fill, track := ctxMeter(used, nw)
-		cc := ctxColor(used, th)
+		cc, rail := ctxColor(used, th), ctxShade(rbg, 0x16)
+		cells := nw + 4 // the badge column too, less its 1-col margin
+		if used >= ctxUsedAmber {
+			cells = nw
+		}
+		bar := ctxMeter(used, cells)
 		meterRow = len(lines)
 		lines = append(lines, band+spine+c(rbg, "   ", false)+
-			c(cc, fill, false)+c(ctxTrackFor(rbg), track, false))
-		// Below the first warning the meter alone says enough: the number would be
-		// a figure nobody acts on, printed on every row. It appears when the color
-		// changes, which is also when it starts being worth reading.
-		meterPct = c(rbg, "     ", false)
-		if used >= ctxUsedAmber {
+			ctxPaint(bar[:min(nw, len(bar))], cc, rail, c))
+
+		if used < ctxUsedAmber {
+			meterTail = ctxPaint(bar[nw:], cc, rail, c) + c(rbg, " ", false)
+		} else {
 			// 100 is the one value that fills the slot, and "100%" would sit flush
 			// against a full meter. A full bar labelled 100 is not ambiguous.
 			pct := strconv.Itoa(used) + "%"
 			if used == 100 {
 				pct = "100"
 			}
-			meterPct = c(cc, padL(pct, 4), false) + c(rbg, " ", false)
+			meterTail = c(cc, padL(pct, 4), false) + c(rbg, " ", false)
 		}
 	}
 
@@ -1496,7 +1521,7 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		case i == 0:
 			ac = badgeCell
 		case i == meterRow:
-			ac = meterPct // right-aligned on the badge's column, same 1-col margin
+			ac = meterTail // the rail carries on, or the number takes over
 		case i == 1 && it.pane == m.current:
 			ac = arrowCell
 		default:
