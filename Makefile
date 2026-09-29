@@ -14,13 +14,13 @@ build:
 install: build
 	install -d $(BINDIR)
 	install -m 0755 $(BIN) $(BINDIR)/
-	install -m 0755 contrib/erma-hook contrib/erma-open contrib/erma-sway-focus contrib/erma-ctx $(BINDIR)/
+	install -m 0755 $(addprefix contrib/,$(SCRIPTS)) $(BINDIR)/
 	@if [ -f "$(SETTINGS)" ] && ! grep -q erma-hook "$(SETTINGS)"; then \
 		echo "warning: $(SETTINGS) does not reference erma-hook — Claude Code hooks are not wired. See README Setup."; \
 	fi
 
 uninstall:
-	rm -f $(BINDIR)/erma $(BINDIR)/erma-hook $(BINDIR)/erma-open $(BINDIR)/erma-sway-focus $(BINDIR)/erma-ctx
+	rm -f $(addprefix $(BINDIR)/,$(BIN) $(SCRIPTS))
 
 test:
 	$(GO) vet ./...

@@ -12,9 +12,9 @@ if grep -qE "\"app_id\": *\"${APP}\"" <<<"$tree"; then
   exit 0
 fi
 # resolve an absolute binary path (the terminal inherits sway's env, not your
-# shell PATH), preferring where `go install` drops it.
+# shell PATH), preferring where `make install` puts it.
 BIN=""
-for c in "$HOME/go/bin/erma" "$HOME/.local/bin/erma"; do
+for c in "$HOME/.local/bin/erma" "$HOME/go/bin/erma"; do
   [ -x "$c" ] && { BIN="$c"; break; }
 done
 [ -z "$BIN" ] && BIN="$(command -v erma 2>/dev/null || echo erma)"
