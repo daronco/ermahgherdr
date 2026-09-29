@@ -70,29 +70,44 @@ see [contrib/README.md](contrib/README.md).
 
 ## Install
 
+From a checkout:
+
+```sh
+make install
+```
+
+Builds the `erma` binary and copies it, along with the four `contrib/erma-*`
+scripts, into `$PREFIX/bin` (default `~/.local/bin`). Override with
+`make install PREFIX=/somewhere/else`; on hosts where `go` is not on `PATH`,
+pass it explicitly: `make GO=/usr/local/go/bin/go install`.
+
+`make uninstall` removes exactly those five files and nothing else.
+
+Alternative for the binary only:
+
 ```sh
 go install github.com/daronco/ermahgherdr/cmd/erma@latest
 ```
 
-From a checkout: `go build -o erma ./cmd/erma`.
+## Setup
 
-The binary is `erma`. Run it in a terminal you keep on the side. A helper that
-opens-or-focuses it in a tagged sway window is in
-[`contrib/erma-open`](contrib/erma-open).
+Make sure `~/.local/bin` is on your `PATH`, then wire the pieces you want.
 
-## Status hook (recommended)
+### Claude Code hooks and status line
 
 erma reads the live state from a tmux pane option `@erma_wait` that a Claude
-Code hook keeps updated. Point Claude Code's hooks at
-[`contrib/erma-hook`](contrib/erma-hook) — in `~/.claude/settings.json`:
+Code hook keeps updated. The `statusLine` segment adds the "% until
+auto-compact" number and flags the session in the bar when it runs low
+(`ERMA_CTX_WARN`, default 15). In `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "Stop":             [{ "hooks": [{ "type": "command", "command": "/path/to/erma-hook stop" }] }],
-    "Notification":     [{ "hooks": [{ "type": "command", "command": "/path/to/erma-hook notify" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/path/to/erma-hook submit" }] }]
-  }
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook stop" }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook notify" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook submit" }] }]
+  },
+  "statusLine": { "type": "command", "command": "~/.local/bin/erma-ctx" }
 }
 ```
 
@@ -110,35 +125,27 @@ adds on top is the part the screen can't show: that a stopped session is
 So without the hook the bar still gets 🟡 and ⚪ right — it just can't tell 🔴
 and 🟢 apart from a session sitting quietly.
 
-## Context segment (optional)
+### sway
 
-Claude Code warns about auto-compaction only 20k tokens ahead — 2% of a 1M
-window. [`contrib/erma-ctx`](contrib/erma-ctx) is a `statusLine` command
-that prints the same "% until auto-compact" number on every render and, once it
-drops to `ERMA_CTX_WARN` (default 15), publishes it for the bar and plays its own
-sound:
-
-```json
-{ "statusLine": { "type": "command", "command": "/path/to/erma-ctx" } }
+```
+# open/focus the bar
+bindsym $mod+c exec erma-open
+# a slim left strip
+for_window [app_id="erma"] floating enable, resize set 12 ppt 96 ppt, move position 0 ppt 2 ppt
+# record the last real terminal so Enter in the bar returns focus to it
+exec_always erma-sway-focus
 ```
 
-## sway integration (optional)
+Without `erma-sway-focus`, 🟢 clears only when you jump from the bar — telling
+"you are looking at the session" from "it is merely the active tmux pane while
+you read your mail" needs to know which window has the keyboard, which is a sway
+question.
 
-- **Focus return** — run [`contrib/erma-sway-focus`](contrib/erma-sway-focus)
-  from your sway config (`exec_always …`). It records the last real terminal so
-  pressing Enter in the bar hands keyboard focus back to it.
-- **Unread clearing** — telling "you are looking at the session" from "it merely
-  is the active tmux pane while you read your mail" means knowing which window
-  has the keyboard, which is a sway question. Without sway, 🟢 clears only when
-  you jump from the bar.
-- **Bindings** — for example:
+### tmux options and state-file contract
 
-  ```
-  # open/focus the bar
-  bindsym $mod+c exec erma-open
-  # a slim left strip
-  for_window [app_id="erma"] floating enable, resize set 12 ppt 96 ppt, move position 0 ppt 2 ppt
-  ```
+erma, `erma-hook`, `erma-ctx` and `erma-sway-focus` talk to each other through
+a handful of tmux options and one state file. See
+[contrib/README.md](contrib/README.md) for the full table.
 
 ## Keys
 

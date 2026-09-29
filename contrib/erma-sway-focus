@@ -8,18 +8,22 @@ Two jobs, one focus-event subscription:
      file. erma's "jump" mode reads it to hand keyboard focus back to your
      main terminal after teleporting the tmux view.
 
-Launch from sway:  exec erma-sway-focus
+Launch from sway:  exec_always erma-sway-focus
+(single instance: a copy started while another runs exits at once, so reloads
+don't stack daemons)
 Raw swaymsg (no i3ipc dependency).
 """
+import fcntl
 import json
 import os
 import subprocess
+import sys
 
 DIM = float(os.environ.get("SWAY_INACTIVE_OPACITY", "1.0"))  # 1.0 = no dimming
 BAR_APP_ID = os.environ.get("ERMA_APP_ID", "erma")
-STATE = os.path.join(
-    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "erma-last-term"
-)
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+STATE = os.path.join(RUNTIME, "erma-last-term")
+LOCK = os.path.join(RUNTIME, "erma-sway-focus.lock")
 
 
 def swaymsg(*args):
@@ -113,4 +117,9 @@ def main():
 
 
 if __name__ == "__main__":
+    lock = open(LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(0)
     main()
