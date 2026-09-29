@@ -316,7 +316,7 @@ func TestItemCacheFollowsSpinner(t *testing.T) {
 func TestCtxShownAndCached(t *testing.T) {
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
-		want := string(ctxCellFull) // the meter
+		want := ctxCellFull // the meter
 		if comp {
 			want = "◔88%"
 		}
@@ -329,6 +329,37 @@ func TestCtxShownAndCached(t *testing.T) {
 		it.ctx = "88"
 		if got := m.itemLines(it, 0, th); !strings.Contains(got, want) {
 			t.Errorf("comp=%v: ctx=88 should show %q", comp, want)
+		}
+	}
+}
+
+// The meter shows on a session at risk or on the one in focus, and nowhere
+// else. itemHeight has to agree with the render or every row below it is drawn
+// in the wrong place and hitTest picks the wrong session.
+func TestCtxShownMatchesHeight(t *testing.T) {
+	th := themeFor(false)
+	for _, tc := range []struct {
+		ctx  string
+		cur  bool
+		want bool
+	}{
+		{"20", false, false}, // calm and not in focus: no meter
+		{"20", true, true},   // in focus: show it whatever the figure
+		{"70", false, true},  // at the warning: show it wherever it is
+		{"99", false, true},
+		{"", true, false}, // nothing published yet
+	} {
+		it := sess{pane: "%1", name: "s", st: idle, w: 1, since: 1, ctx: tc.ctx}
+		m := model{w: 28, h: 40, sel: -1, rows: []sess{it}}
+		if tc.cur {
+			m.current = it.pane
+		}
+		if got := m.ctxShown(it); got != tc.want {
+			t.Errorf("ctx=%q cur=%v: shown=%v, want %v", tc.ctx, tc.cur, got, tc.want)
+		}
+		got := len(strings.Split(m.renderItem(it, 0, th), "\n"))
+		if want := m.itemHeight(it, false); got != want {
+			t.Errorf("ctx=%q cur=%v: rendered %d lines, itemHeight says %d", tc.ctx, tc.cur, got, want)
 		}
 	}
 }
@@ -348,24 +379,16 @@ func TestCtxTagOnlyWhenLow(t *testing.T) {
 
 // The meter fills from the used end and never overflows its cells.
 func TestCtxMeterWidth(t *testing.T) {
-	spent := func(cells []rune) int {
-		n := 0
-		for _, r := range cells {
-			if r != ctxCellTrack {
-				n++
-			}
-		}
-		return n
-	}
 	for _, used := range []int{0, 1, 42, 75, 99, 100} {
-		if got := lipgloss.Width(string(ctxMeter(used, 12))); got != 12 {
+		fill, track := ctxMeter(used, 12)
+		if got := lipgloss.Width(fill + track); got != 12 {
 			t.Errorf("used=%d: meter is %d cells, want 12", used, got)
 		}
 	}
-	if n := spent(ctxMeter(0, 12)); n != 0 {
-		t.Errorf("used=0 should draw no fill, got %d cells", n)
+	if fill, _ := ctxMeter(0, 12); fill != "" {
+		t.Errorf("used=0 should draw no fill, got %q", fill)
 	}
-	if n := spent(ctxMeter(100, 12)); n != 12 {
-		t.Errorf("used=100 should fill every cell, got %d", n)
+	if _, track := ctxMeter(100, 12); track != "" {
+		t.Errorf("used=100 should leave no track, got %q", track)
 	}
 }
