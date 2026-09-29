@@ -24,7 +24,7 @@ Everything the helpers do is written to tmux options and one state file:
 |---|---|---|---|
 | `@erma_wait` (pane) | `erma-hook` | erma | `perm` · `waiting` · `working` |
 | `@erma_wait_since` (pane) | `erma-hook` | erma | unix timestamp of the last change |
-| `@erma_ctx_left` (pane) | `erma-ctx` | erma | % of context left before auto-compact · unset while above the threshold |
+| `@erma_ctx_left` (pane) | `erma-ctx` | erma | % of context left before auto-compact, republished on every change · erma draws it as a meter, inverted into % used |
 | `@erma_sound` (global) | erma (`s` key / ♫ chip) | `erma-hook`, `erma-ctx` | `on` · anything else = off |
 | `$XDG_RUNTIME_DIR/erma-last-term` | `erma-sway-focus` | erma | sway `con_id` of the last real terminal |
 

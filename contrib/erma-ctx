@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Claude Code statusLine segment: how much context is left before auto-compact.
+# Claude Code statusLine segment: how much context a session has spent.
 #
 # Claude Code's own warning shows up a fixed 20k tokens before it compacts — on a
-# 1M window that is 2% of it, far too late to wrap a session up. This prints the
-# same "% until auto-compact" number on every render, and publishes it as the
-# pane option @erma_ctx_left while it is at or under ERMA_CTX_WARN (default 15):
-# erma shows it, and the crossing plays its own sound.
+# 1M window that is 2% of it, far too late to wrap a session up. This prints how
+# much of the room to auto-compact is gone, and publishes the same number as the
+# pane option @erma_ctx_used every time it moves — erma draws a meter from it on
+# every session. Reaching ERMA_CTX_WARN (default 85) plays its own sound.
+#
+# Usage, not headroom, on purpose: the bar and this segment have to count the
+# same direction, or reading one after the other means doing arithmetic.
 #
 # Usage in ~/.claude/settings.json (or from a wrapper that joins other segments):
 #   "statusLine": { "type": "command", "command": "/path/to/erma-ctx" }
@@ -13,7 +16,7 @@
 # Needs jq. tmux is optional: outside it, only the segment is printed.
 set -euo pipefail
 
-warn="${ERMA_CTX_WARN:-15}"
+warn="${ERMA_CTX_WARN:-85}"
 
 # Mirrors Claude Code 2.1.284: the window minus 20k kept for output, minus a 13k
 # buffer. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only move that point earlier.
@@ -28,31 +31,36 @@ left="$(jq -r --arg ovr "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" '
       | if $l < 0 then 0 else $l end
     end' 2>/dev/null || true)"
 
-new=""
+used=""
 if [[ -n "$left" ]]; then
-  if (( left <= warn )); then
-    new="$left"
-    printf '\033[1;38;5;141mctx %s%% left\033[0m' "$left"
+  used=$(( 100 - left ))
+  if (( used >= warn )); then
+    printf '\033[1;38;5;141mctx %s%% used\033[0m' "$used"
   else
-    printf '\033[38;5;244mctx %s%% left\033[0m' "$left"
+    printf '\033[38;5;244mctx %s%% used\033[0m' "$used"
   fi
 fi
 
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
 p="$TMUX_PANE"
 
-cur="$(tmux show -p -t "$p" -v @erma_ctx_left 2>/dev/null || true)"
-[[ "$cur" == "$new" ]] && exit 0   # no change -> no tmux write
+cur="$(tmux show -p -t "$p" -v @erma_ctx_used 2>/dev/null || true)"
+[[ "$cur" == "$used" ]] && exit 0   # no change -> no tmux write
 
-if [[ -n "$new" ]]; then
-  tmux set -p -t "$p" @erma_ctx_left "$new" 2>/dev/null || true
+if [[ -n "$used" ]]; then
+  tmux set -p -t "$p" @erma_ctx_used "$used" 2>/dev/null || true
 else
-  tmux set -p -u -t "$p" @erma_ctx_left 2>/dev/null || true
+  tmux set -p -u -t "$p" @erma_ctx_used 2>/dev/null || true
 fi
 
-# One ping per crossing: only the step from "plenty" to "low". A compact puts the
-# option back to unset, so the next session running low pings again.
-[[ -z "$cur" && -n "$new" ]] || exit 0
+# One ping per crossing into the warn band. The option is published on every move
+# now, so the crossing is a comparison and not "was it set at all"; a compact
+# drops the value back out of the band and arms the next one.
+was_warn=0
+is_warn=0
+[[ -n "$cur" ]] && (( cur >= warn )) && was_warn=1
+[[ -n "$used" ]] && (( used >= warn )) && is_warn=1
+(( was_warn == 0 && is_warn == 1 )) || exit 0
 snd="${ERMA_SOUND_CTX:-/usr/share/sounds/freedesktop/stereo/phone-outgoing-busy.oga}"
 gate="$(tmux show -gv @erma_sound 2>/dev/null || true)"
 if [[ "$gate" == "on" && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then

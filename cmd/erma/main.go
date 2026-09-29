@@ -46,6 +46,7 @@ var (
 	cDone     = lipgloss.Color("#63c07a")
 	cAmber    = lipgloss.Color("#e8a33d")
 	cCtx      = lipgloss.Color("#b392f0")
+	cCtxRest  = lipgloss.Color("#7e8c8c") // the meter at rest: neutral, and cool like the rest of the type
 	bgUrgent  = lipgloss.Color("#2b1e1e")
 	bgBoth    = lipgloss.Color("#3a2a2a")
 	bgDone    = lipgloss.Color("#1d2721")
@@ -143,7 +144,7 @@ type sess struct {
 	mark                string // the pane option, verbatim — "unread" resists auto-read
 	st                  state
 	since               int64
-	ctx                 string // @erma_ctx_left: % left before auto-compact, set only while low
+	ctx                 string // @erma_ctx_used: % of the room to auto-compact already spent
 	s, w, p             int
 }
 
@@ -454,7 +455,7 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@erma_wait}", "#{@erma_wait_since}", "#{pane_current_path}", "#{pane_title}",
-		"#{@ctx_label}", "#{@erma_ctx_left}",
+		"#{@ctx_label}", "#{@erma_ctx_used}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var recs [][]string
@@ -1179,7 +1180,11 @@ func (m model) itemHeight(it sess, comp bool) int {
 		return 1
 	}
 	// names + the second line (tmux window number + time) + top & bottom pad
-	return len(m.nameLines(it)) + 1 + 2
+	h := len(m.nameLines(it)) + 1 + 2
+	if ctxUsed(it) >= 0 {
+		h++ // the context meter
+	}
+	return h
 }
 
 // listTop: the screen row the first item is drawn on. Bottom-up, the list is
@@ -1294,14 +1299,88 @@ func metaLine(it sess) string {
 	return tag + " · " + age
 }
 
+// Everything downstream of erma-ctx counts the same direction: how much of the
+// room to auto-compact is spent. ctxUsedRed mirrors ERMA_CTX_WARN there — past
+// it the figure is worth reading, and not just the meter.
+const (
+	ctxUsedAmber = 70
+	ctxUsedRed   = 85
+)
+
 // ctxTag: the low-context mark, or "" while there is room. <= 4 cells, so it fits
-// the compact row's age slot.
+// the compact row's age slot — which is the only place it still appears, since a
+// full row draws the meter instead.
 func ctxTag(it sess) string {
-	if it.ctx == "" {
+	if used := ctxUsed(it); used < ctxUsedRed {
 		return ""
 	}
 	return "◔" + it.ctx + "%"
 }
+
+// ctxUsed: -1 when the pane has published nothing yet.
+func ctxUsed(it sess) int {
+	n, err := strconv.Atoi(it.ctx)
+	if it.ctx == "" || err != nil {
+		return -1
+	}
+	return min(100, max(0, n))
+}
+
+// ctxColor: at rest the meter takes the same gray as an idle age line, so it
+// sits in the row without asking for anything. It only speaks once the session
+// is actually burning through its window. The resting color is the same
+// whatever the session's state — this meter reports context, not status, and
+// tinting it green on a finished session would say otherwise.
+// ctxTrackFor: the unspent rail, one step up from whatever the row sits on. A
+// fixed gray was muddy on the tinted rows — green, red and the cyan selection
+// are all lighter than it was. Only the rail follows the row; the spent part
+// carries a meaning of its own and must not change with the background.
+func ctxTrackFor(rbg lipgloss.Color) lipgloss.Color {
+	var r, g, b int
+	if _, err := fmt.Sscanf(string(rbg), "#%02x%02x%02x", &r, &g, &b); err != nil {
+		return rbg
+	}
+	const step = 0x16
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x",
+		min(r+step, 0xff), min(g+step, 0xff), min(b+step, 0xff)))
+}
+
+func ctxColor(used int, th theme) lipgloss.Color {
+	switch {
+	case used >= ctxUsedRed:
+		return cUrgent
+	case used >= ctxUsedAmber:
+		return cAmber
+	}
+	return cCtxRest
+}
+
+// The meter sits on the baseline at half the cell height, so the row reads as a
+// footnote to the name above it and not as a third line of equal weight. Spent
+// is a half-block, the track a thin rule; the quadrant carries the odd half, so
+// the meter still moves at ~3% on a row this wide.
+const (
+	ctxCellFull  = "\u2584"
+	ctxCellHalf  = "\u2596"
+	ctxCellTrack = "\u2581"
+)
+
+// ctxMeter splits the meter into what is spent and the track behind it, so the
+// two can carry different colors.
+func ctxMeter(used, cells int) (fill, track string) {
+	if cells < 1 {
+		return "", ""
+	}
+	halves := used * cells * 2 / 100
+	full := min(halves/2, cells)
+	fill = strings.Repeat(ctxCellFull, full)
+	if halves%2 == 1 && full < cells {
+		fill += ctxCellHalf
+		full++
+	}
+	return fill, strings.Repeat(ctxCellTrack, cells-full)
+}
+
 func rowBg(it sess, sel bool, th theme) lipgloss.Color {
 	switch {
 	case it.st == urgent && sel:
@@ -1363,12 +1442,36 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		}
 		lines = append(lines, band+spine+c(rbg, " ", false)+glyph+c(nc, padR(nm, nw), bold))
 	}
-	// second line: the time (gutter cols 3-5 empty), and the low-context mark
-	// right-aligned under the name
-	tag := ctxTag(it)
-	mw := max(0, nw-utf8.RuneCountInString(tag))
+	// second line: the time (gutter cols 3-5 empty). The low-context mark stays a
+	// compact-mode thing — here the meter below already carries the same number,
+	// and in the other direction.
 	lines = append(lines, band+spine+c(rbg, "   ", false)+
-		c(metaColorOf(it, sel, th), padR(metaLine(it), mw), false)+c(cCtx, tag, true))
+		c(metaColorOf(it, sel, th), padR(metaLine(it), nw), false))
+
+	// third line: the context meter, spanning the name column exactly. Its number
+	// goes in the right column instead, on the badge's own grid — see the loop
+	// below. Absent until the pane's statusline has published a figure.
+	meterRow, meterPct := -1, ""
+	if used := ctxUsed(it); used >= 0 {
+		fill, track := ctxMeter(used, nw)
+		cc := ctxColor(used, th)
+		meterRow = len(lines)
+		lines = append(lines, band+spine+c(rbg, "   ", false)+
+			c(cc, fill, false)+c(ctxTrackFor(rbg), track, false))
+		// Below the first warning the meter alone says enough: the number would be
+		// a figure nobody acts on, printed on every row. It appears when the color
+		// changes, which is also when it starts being worth reading.
+		meterPct = c(rbg, "     ", false)
+		if used >= ctxUsedAmber {
+			// 100 is the one value that fills the slot, and "100%" would sit flush
+			// against a full meter. A full bar labelled 100 is not ambiguous.
+			pct := strconv.Itoa(used) + "%"
+			if used == 100 {
+				pct = "100"
+			}
+			meterPct = c(cc, padL(pct, 4), false) + c(rbg, " ", false)
+		}
+	}
 
 	// right column (2 cells): the tmux window # as a dark badge on line 0, and
 	// the current-session arrow ▸ just below it (line 1) when applicable.
@@ -1392,6 +1495,8 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		switch {
 		case i == 0:
 			ac = badgeCell
+		case i == meterRow:
+			ac = meterPct // right-aligned on the badge's column, same 1-col margin
 		case i == 1 && it.pane == m.current:
 			ac = arrowCell
 		default:

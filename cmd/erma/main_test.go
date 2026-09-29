@@ -154,7 +154,7 @@ func TestRowsFitWidth(t *testing.T) {
 	rows := []sess{
 		{pane: "%1", name: "dados financeiros no bigquery", st: idle, w: 6, since: 1},
 		{pane: "%2", name: "abel", st: urgent, w: 12, since: 1},
-		{pane: "%3", name: "dai/compact-warn", st: done, w: 3, since: 1, ctx: "12"},
+		{pane: "%3", name: "dai/compact-warn", st: done, w: 3, since: 1, ctx: "88"},
 	}
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
@@ -310,20 +310,54 @@ func TestItemCacheFollowsSpinner(t *testing.T) {
 	}
 }
 
-// The low-context mark rides the same cached row, so ctx has to be part of the
-// key: a session crossing the threshold would otherwise keep its old picture.
-func TestCtxTagShownAndCached(t *testing.T) {
+// Context rides the same cached row, so it has to be part of the key: a session
+// burning through its window would otherwise keep its old picture. A full row
+// shows the meter, a compact one has no room for it and falls back to the mark.
+func TestCtxShownAndCached(t *testing.T) {
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
+		want := ctxCellFull // the meter
+		if comp {
+			want = "◔88%"
+		}
 		m := model{w: 38, h: 44, sel: -1, comp: comp,
 			pulse: map[string]int{}, icache: map[itemKey]string{}}
 		it := sess{pane: "%7", name: "dai/compact-warn", st: idle, w: 3, since: 1}
-		if got := m.itemLines(it, 0, th); strings.Contains(got, "◔") {
-			t.Errorf("comp=%v: plenty of context, no mark expected", comp)
+		if got := m.itemLines(it, 0, th); strings.Contains(got, want) {
+			t.Errorf("comp=%v: nothing published yet, %q not expected", comp, want)
 		}
-		it.ctx = "12"
-		if got := m.itemLines(it, 0, th); !strings.Contains(got, "◔12%") {
-			t.Errorf("comp=%v: ctx=12 should show ◔12%%", comp)
+		it.ctx = "88"
+		if got := m.itemLines(it, 0, th); !strings.Contains(got, want) {
+			t.Errorf("comp=%v: ctx=88 should show %q", comp, want)
 		}
+	}
+}
+
+// The mark is the compact row's only channel, so it must stay quiet until the
+// session is actually low — otherwise it just repeats what the age line says.
+func TestCtxTagOnlyWhenLow(t *testing.T) {
+	for _, tc := range []struct {
+		ctx  string
+		want string
+	}{{"", ""}, {"40", ""}, {"84", ""}, {"85", "◔85%"}, {"97", "◔97%"}} {
+		if got := ctxTag(sess{ctx: tc.ctx}); got != tc.want {
+			t.Errorf("ctx=%q: tag %q, want %q", tc.ctx, got, tc.want)
+		}
+	}
+}
+
+// The meter fills from the used end and never overflows its cells.
+func TestCtxMeterWidth(t *testing.T) {
+	for _, used := range []int{0, 1, 42, 75, 99, 100} {
+		fill, track := ctxMeter(used, 12)
+		if got := lipgloss.Width(fill + track); got != 12 {
+			t.Errorf("used=%d: meter is %d cells, want 12", used, got)
+		}
+	}
+	if fill, _ := ctxMeter(0, 12); fill != "" {
+		t.Errorf("used=0 should draw no fill, got %q", fill)
+	}
+	if _, track := ctxMeter(100, 12); track != "" {
+		t.Errorf("used=100 should leave no track, got %q", track)
 	}
 }
