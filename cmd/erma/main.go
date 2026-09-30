@@ -42,20 +42,20 @@ import (
 
 // immune palette (identical focused/unfocused)
 var (
-	cUrgent   = lipgloss.Color("#e05b57")
+	cUrgent   = lipgloss.Color("#ab7bf2") // bullet, spine, badge and counter of a session waiting on you
 	cDone     = lipgloss.Color("#63c07a")
 	cAmber    = lipgloss.Color("#e8a33d")
-	cCtx      = lipgloss.Color("#b392f0")
+	cCtx      = lipgloss.Color("#b392f0") // context, wherever it speaks: the mark, the meter at its loudest
 	cCtxRest  = lipgloss.Color("#7e8c8c") // the meter at rest: neutral, and cool like the rest of the type
 	cCtxDim   = lipgloss.Color("#5c6666") // its number, while the figure is not worth acting on
-	bgUrgent  = lipgloss.Color("#2b1e1e")
-	bgBoth    = lipgloss.Color("#3a2a2a")
+	bgUrgent  = lipgloss.Color("#2a2036")
+	bgBoth    = lipgloss.Color("#382c4a")
 	bgDone    = lipgloss.Color("#1d2721")
 	bgDoneSel = lipgloss.Color("#293830")
-	lblUrgent = lipgloss.Color("#f2dedd")
+	lblUrgent = lipgloss.Color("#e6dcf7")
 	lblDone   = lipgloss.Color("#cfe8d5")
 	lblAmber  = lipgloss.Color("#e8c58a")
-	metaUrg   = lipgloss.Color("#a97b79")
+	metaUrg   = lipgloss.Color("#8f7bab")
 	metaDone  = lipgloss.Color("#7d9c88")
 	metaAmber = lipgloss.Color("#8a7550")
 	metaSel   = lipgloss.Color("#8a9a9a")
@@ -1301,18 +1301,18 @@ func metaLine(it sess) string {
 }
 
 // Everything downstream of erma-ctx counts the same direction: how much of the
-// room to auto-compact is spent. ctxUsedRed mirrors ERMA_CTX_WARN there — past
+// room to auto-compact is spent. ctxUsedHigh mirrors ERMA_CTX_WARN there — past
 // it the figure is worth reading, and not just the meter.
 const (
 	ctxUsedAmber = 70
-	ctxUsedRed   = 85
+	ctxUsedHigh  = 85
 )
 
 // ctxTag: the low-context mark, or "" while there is room. <= 4 cells, so it fits
 // the compact row's age slot — which is the only place it still appears, since a
 // full row draws the meter instead.
 func ctxTag(it sess) string {
-	if used := ctxUsed(it); used < ctxUsedRed {
+	if used := ctxUsed(it); used < ctxUsedHigh {
 		return ""
 	}
 	return "◔" + it.ctx + "%"
@@ -1347,8 +1347,12 @@ func ctxShade(rbg lipgloss.Color, step int) lipgloss.Color {
 
 func ctxColor(used int, th theme) lipgloss.Color {
 	switch {
-	case used >= ctxUsedRed:
-		return cUrgent
+	case used >= ctxUsedHigh:
+		// Purple is what the bar raises its voice in — the same purple a waiting
+		// session takes, and the one Claude Code's own status line uses for this.
+		// The two are told apart by form, not hue: waiting fills the row's
+		// background, running out draws a thin line under it.
+		return cCtx
 	case used >= ctxUsedAmber:
 		return cAmber
 	}
@@ -1480,7 +1484,7 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		if used >= ctxUsedAmber {
 			pc = cc
 		}
-		meterTail = c(pc, padL(pct, 4), false) + c(rbg, " ", false)
+		meterTail = c(pc, padL(pct, 4), used >= ctxUsedHigh) + c(rbg, " ", false)
 	}
 
 	// right column (2 cells): the tmux window # as a dark badge on line 0, and
