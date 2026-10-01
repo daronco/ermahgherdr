@@ -24,8 +24,8 @@ Everything the helpers do is written to tmux options and one state file:
 |---|---|---|---|
 | `@erma_wait` (pane) | `erma-hook` | erma | `perm` · `waiting` · `working` |
 | `@erma_wait_since` (pane) | `erma-hook` | erma | unix timestamp of the last change |
-| `@erma_ctx_left` (pane) | `erma-ctx` | erma | % of context left before auto-compact, republished on every change · erma draws it as a meter, inverted into % used |
-| `@erma_sound` (global) | erma (`s` key / ♫ chip) | `erma-hook`, `erma-ctx` | `on` · anything else = off |
+| `@erma_ctx_used` (pane) | `erma-ctx` | erma | % of the room to auto-compact already spent, republished on every change · erma draws it as a meter |
+| `@erma_sound` (global) | erma (`s` key / ♫ chip) | `erma-hook` | `on` · anything else = off |
 | `$XDG_RUNTIME_DIR/erma-last-term` | `erma-sway-focus` | erma | sway `con_id` of the last real terminal |
 
 Sessions themselves are discovered by erma directly — every tmux pane whose
@@ -38,6 +38,7 @@ title).
 `erma-hook` plays a sound on the transitions worth your attention, gated by
 `@erma_sound`. Override the files with `ERMA_SOUND_PERM` and
 `ERMA_SOUND_DONE`; it needs `paplay` and falls silent if either the file or
-`paplay` is missing. `erma-ctx` plays `ERMA_SOUND_CTX` (default
-`phone-outgoing-busy.oga`) once when a session crosses into low context, under the
-same gate.
+`paplay` is missing.
+
+Context is silent on purpose — the meter changing color says it, and a session
+running low is not something you need to hear the second it happens.

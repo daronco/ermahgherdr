@@ -5,7 +5,9 @@
 # 1M window that is 2% of it, far too late to wrap a session up. This prints how
 # much of the room to auto-compact is gone, and publishes the same number as the
 # pane option @erma_ctx_used every time it moves — erma draws a meter from it on
-# every session. Reaching ERMA_CTX_WARN (default 85) plays its own sound.
+# every session, and colors it past ERMA_CTX_WARN (default 85). No sound: the
+# meter changing color carries this on its own, and a session running low is not
+# an event you have to hear about the second it happens.
 #
 # Usage, not headroom, on purpose: the bar and this segment have to count the
 # same direction, or reading one after the other means doing arithmetic.
@@ -51,18 +53,4 @@ if [[ -n "$used" ]]; then
   tmux set -p -t "$p" @erma_ctx_used "$used" 2>/dev/null || true
 else
   tmux set -p -u -t "$p" @erma_ctx_used 2>/dev/null || true
-fi
-
-# One ping per crossing into the warn band. The option is published on every move
-# now, so the crossing is a comparison and not "was it set at all"; a compact
-# drops the value back out of the band and arms the next one.
-was_warn=0
-is_warn=0
-[[ -n "$cur" ]] && (( cur >= warn )) && was_warn=1
-[[ -n "$used" ]] && (( used >= warn )) && is_warn=1
-(( was_warn == 0 && is_warn == 1 )) || exit 0
-snd="${ERMA_SOUND_CTX:-/usr/share/sounds/freedesktop/stereo/phone-outgoing-busy.oga}"
-gate="$(tmux show -gv @erma_sound 2>/dev/null || true)"
-if [[ "$gate" == "on" && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then
-  paplay "$snd" >/dev/null 2>&1 &
 fi
