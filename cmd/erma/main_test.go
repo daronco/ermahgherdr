@@ -20,6 +20,8 @@ func TestStatusOf(t *testing.T) {
 		want state
 	}{
 		{"permission up", "perm", screen{prompt: true}, true, urgent},
+		{"dialog, no notification", "", screen{prompt: true, form: true}, true, urgent},
+		{"dialog under a stale spinner", "working", screen{busy: true, prompt: true, form: true}, true, urgent},
 		{"perm, pane unread", "perm", screen{}, false, urgent},
 		{"approved, now working", "perm", screen{busy: true}, true, proc},
 		{"working", "working", screen{busy: true}, true, proc},
@@ -76,11 +78,17 @@ func TestReadScreen(t *testing.T) {
 			" Do you want to create permprobe-xyz.txt?\n ❯ 1. Yes\n" +
 			"   2. Yes, and switch to accept edits for this session (shift+tab)\n   3. No\n\n" +
 			" Esc to cancel · Tab to amend\n",
-			screen{prompt: true}},
+			screen{prompt: true, form: true}},
 		{"question", "Choose an option:\n❯ 1. Keep it\n  2. Drop it\n", screen{prompt: true}},
 		{"typed at the input box", "─── a session ──\n❯ 2. also check the other one\n───\n", screen{}},
 		{"a numbered list Claude wrote", "● Steps:\n  1. build\n  2. test\n  3. ship\n─── a session ──\n❯ \n",
 			screen{}},
+		{"an answer quoting a dialog", "● It asks: Do you want to proceed? Esc to cancel\n✻ Churned for 3s\n" +
+			"───\n❯ \n───\n  ⏵⏵ auto mode on\n", screen{}},
+		{"MCP elicitation", "───\n MCP server \"notion\" requests your input\n ❯ Accept\n   Decline\n Esc to cancel\n",
+			screen{prompt: true, form: true}},
+		{"a menu you opened", "───\n Select model\n ❯ 1. Default\n   2. Opus\n Enter to set as default · Esc to cancel\n",
+			screen{prompt: true}},
 	} {
 		if got := readScreen(c.body); got != c.want {
 			t.Errorf("%s: readScreen = %+v, want %+v", c.name, got, c.want)
@@ -88,15 +96,22 @@ func TestReadScreen(t *testing.T) {
 	}
 }
 
-// testdata/screen-*.txt are whole panes captured off a live Claude Code, before
-// and after answering a real permission prompt.
+// testdata/screen-*.txt are whole panes captured off a live Claude Code. When its
+// UI changes, capture the state that broke (tmux capture-pane -p) and add it here.
 func TestReadScreenCaptures(t *testing.T) {
 	for _, c := range []struct {
 		file string
 		want screen
 	}{
-		{"testdata/screen-permission.txt", screen{prompt: true}},
+		{"testdata/screen-permission.txt", screen{prompt: true, form: true}},
 		{"testdata/screen-answered.txt", screen{}},
+		// 2.1.287 from here down
+		{"testdata/screen-permission-bash.txt", screen{prompt: true, form: true}},
+		{"testdata/screen-question.txt", screen{prompt: true, form: true}},
+		{"testdata/screen-working-tasks.txt", screen{busy: true}},
+		{"testdata/screen-background-wait.txt", screen{busy: true}},
+		{"testdata/screen-background-done.txt", screen{}},
+		{"testdata/screen-transcript.txt", screen{viewer: true}},
 	} {
 		b, err := os.ReadFile(c.file)
 		if err != nil {

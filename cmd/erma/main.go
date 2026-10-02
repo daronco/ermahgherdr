@@ -274,14 +274,62 @@ func run(name string, a ...string) { _ = exec.Command(name, a...).Run() }
 // this and cannot: Claude Code writes it once per turn and leaves it there, so
 // a working pane and a finished one carry the same glyph.
 type screen struct {
-	busy   bool // the status line is ticking: the agent is working
-	prompt bool // a choice is up: a permission prompt, or a question
+	busy   bool // the status line is ticking, or it waits on background agents
+	prompt bool // a choice may be up: enough to keep a hook's "perm" alive
+	form   bool // a dialog is certainly up: enough to raise red with no hook
+	viewer bool // the transcript viewer covers the session: the screen says nothing
 }
 
 // busyLine matches Claude Code's ticking status line — "✢ Reticulating… (15m
 // 52s · ↓ 45.1k tokens)". The elapsed counter is the part that only exists
 // while it works, and it survives the verb list and the glyph set changing.
 var busyLine = regexp.MustCompile(`…\s*\(\d+[smh]`)
+
+// bgWait: the turn ended but the agents it started are still running, and
+// Claude resumes on its own when they finish — nothing for you to do yet. The
+// line outlives the wait in the transcript, so only the newest status line counts.
+var bgWait = regexp.MustCompile(`Waiting for [1-9]\d* background agents? to finish`)
+
+// lastStatus: the newest status line in live — the first one, going up from the
+// input box, that opens with one of Claude's spinner glyphs.
+func lastStatus(live []string) string {
+	for _, ln := range live {
+		if r := []rune(strings.TrimSpace(ln)); len(r) > 0 && strings.ContainsRune("*·✢✳✶✻✽", r[0]) {
+			return ln
+		}
+	}
+	return ""
+}
+
+// liveLines: how far above the input box the status line can sit. The task list
+// Claude draws between the two runs to six lines.
+const liveLines = 12
+
+// regions splits a pane at its dividers. live is what sits just above the input
+// box (status line, task list); foot is what follows the last divider (a dialog,
+// or the footer). Only these two can be live — everything above is transcript,
+// and an answer that quotes "Do you want to" must not read as a prompt.
+func regions(lines []string) (live, foot []string) {
+	var rules []int
+	for i, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), "──") {
+			rules = append(rules, i)
+		}
+	}
+	top, foot := len(lines), lines
+	switch n := len(rules); {
+	case n >= 2:
+		top, foot = rules[n-2], lines[rules[n-1]+1:]
+	case n == 1:
+		top, foot = rules[0], lines[rules[0]+1:]
+	}
+	for i := top - 1; i >= 0 && len(live) < liveLines; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			live = append(live, lines[i])
+		}
+	}
+	return live, foot
+}
 
 // optLine matches one entry of a choice list — "❯ 1. Yes", "  2. No" — after the
 // box border is trimmed off. One alone is not a prompt: the input box is also a
@@ -350,7 +398,9 @@ func pollPanes(panes []string) tmuxPoll {
 	poll.screens = map[string]screen{}
 	for i, blk := range blocks[3:] {
 		if i < len(panes) && strings.TrimSpace(blk) != "" {
-			poll.screens[panes[i]] = readScreen(blk)
+			if sc := readScreen(blk); !sc.viewer {
+				poll.screens[panes[i]] = sc
+			}
 		}
 	}
 	return poll
@@ -362,27 +412,32 @@ func pollPanes(panes []string) tmuxPoll {
 // so a marker still on screen means it is still live.
 func readScreen(body string) screen {
 	var sc screen
-	opts, cursored := 0, false
-	for _, ln := range strings.Split(body, "\n") {
-		switch {
-		case busyLine.MatchString(ln):
-			sc.busy = true
-		// The question is phrased per tool ("Do you want to create X?", "…to
-		// proceed?"), so only the opening is worth matching. "Esc to cancel" is
-		// the footer every one of these boxes carries.
-		case strings.Contains(ln, "Do you want to "),
-			strings.Contains(ln, "Choose an option:"),
-			strings.Contains(ln, "Esc to cancel"):
-			sc.prompt = true
-		}
+	live, foot := regions(strings.Split(body, "\n"))
+	for _, ln := range live {
+		sc.busy = sc.busy || busyLine.MatchString(ln)
+	}
+	sc.busy = sc.busy || bgWait.MatchString(lastStatus(live))
+	opts, cursored, esc, ask := 0, false, false, false
+	for _, ln := range foot {
+		l := strings.ToLower(ln)
+		sc.viewer = sc.viewer || strings.Contains(l, "showing detailed transcript")
+		// "Esc to cancel" is the footer every dialog carries; the second half tells
+		// a dialog waiting on you from a menu you opened yourself. The question is
+		// phrased per tool ("Do you want to create X?"), so only its opening counts.
+		esc = esc || strings.Contains(l, "esc to cancel")
+		ask = ask || strings.Contains(l, "do you want to ") ||
+			strings.Contains(l, "enter to select") || strings.Contains(l, "enter to confirm") ||
+			strings.Contains(l, "requests your input") || strings.Contains(l, "run a dynamic workflow?")
+		sc.prompt = sc.prompt || strings.Contains(l, "choose an option:")
 		if m := optLine.FindStringSubmatch(strings.TrimLeft(ln, " │")); m != nil {
 			opts++
 			cursored = cursored || m[1] != ""
 		}
 	}
+	sc.form = esc && ask
 	// A list you are choosing from: several entries, one of them under the
 	// cursor. A numbered list Claude merely wrote out has no cursor.
-	sc.prompt = sc.prompt || (cursored && opts > 1)
+	sc.prompt = sc.prompt || esc || ask || (cursored && opts > 1)
 	return sc
 }
 
@@ -396,8 +451,13 @@ func readScreen(body string) screen {
 // Anything that stopped and has not been looked at is `done`, not idle: "waiting"
 // means read, and only the bar writes it, when you look. "unread" is the same
 // green, put there by hand — see markUnread.
+//
+// A dialog on screen wins over everything: not every one of them sends the
+// permission notification, and a spinner left over from the turn is not work.
 func statusOf(wait string, sc screen, seen bool) state {
 	switch {
+	case sc.form:
+		return urgent
 	case sc.busy:
 		return proc
 	case wait == "perm":

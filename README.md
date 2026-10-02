@@ -36,7 +36,7 @@ Status by color (**color means urgency, nothing else**):
 
 - 🔴 **red** — needs you: a permission prompt is waiting.
 - 🟢 **green** — unread: it finished and you haven't looked at the answer yet.
-- 🟡 **amber** — processing: the agent is working (animated spinner).
+- 🟡 **amber** — processing: the agent is working (animated spinner), or waiting on background agents it started.
 - ⚪ **gray** — idle: read / doing nothing (most sessions, most of the time).
 
 Green clears the moment you actually see the pane — you jump to it from the bar,

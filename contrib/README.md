@@ -30,8 +30,7 @@ Everything the helpers do is written to tmux options and one state file:
 
 Sessions themselves are discovered by erma directly — every tmux pane whose
 foreground command is `claude` — so a session shows up with no hook installed at
-all; only its state stays coarse (processing vs idle, inferred from the terminal
-title).
+all; only its state stays coarse (processing, a dialog up, or idle, read off the screen).
 
 ## Sound
 

@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.287
+▝▜██████▀  Haiku 4.5 · Claude Team
+ ▝▝   ▝▝   ~/probe
+
+
+❯ Use the AskUserQuestion tool right now to ask me one question: tea or coffee? Do nothing else.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Bebida
+
+Tea or coffee?
+
+❯ 1. Tea
+     Chá
+  2. Coffee
+     Café
+  3. Type something.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
