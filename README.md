@@ -34,7 +34,7 @@ mascot at the bottom.
 
 Status by color (**color means urgency, nothing else**):
 
-- 🔴 **red** — needs you: a permission prompt is waiting.
+- 🟣 **purple** — needs you: a permission prompt or a question is waiting.
 - 🟢 **green** — unread: it finished and you haven't looked at the answer yet.
 - 🟡 **amber** — processing: the agent is working (animated spinner), or waiting on background agents it started.
 - ⚪ **gray** — idle: read / doing nothing (most sessions, most of the time).
@@ -48,10 +48,7 @@ to keep asking. That mark is pinned — unlike the automatic green it survives t
 pane being right there in front of you, and only a deliberate jump, or the
 session doing something new, clears it.
 
-A violet **◔N%** under the name means that session is about to be auto-compacted:
-only N% of the context is left. It sits beside the status color, never instead of
-it, and shows up only while the session is low (≤ 15% by default) — see the
-context segment below.
+A meter under the name shows how much of the room to auto-compact a session has spent. It draws on the session you are looking at and on any past 70%, turns amber there and purple from 85% — the same purple as waiting on you, told apart by form: waiting fills the row, the meter is a thin line under it. Compact rows show it as **◔N%** (N% spent), from 85%.
 
 **⤷N** on the time line means that session has N subagents running.
 
@@ -97,10 +94,7 @@ Make sure `~/.local/bin` is on your `PATH`, then wire the pieces you want.
 
 ### Claude Code hooks and status line
 
-erma reads the live state from a tmux pane option `@erma_wait` that a Claude
-Code hook keeps updated. The `statusLine` segment adds the "% until
-auto-compact" number and flags the session in the bar when it runs low
-(`ERMA_CTX_WARN`, default 15). In `~/.claude/settings.json`:
+erma reads the live state from a tmux pane option `@erma_wait` that a Claude Code hook keeps updated. The `statusLine` segment prints how much of the room to auto-compact is spent, colored past `ERMA_CTX_WARN` (default 85), and feeds the meter in the bar. In `~/.claude/settings.json`:
 
 ```json
 {
@@ -120,13 +114,13 @@ written by the bar itself, when you look at the pane.
 
 None of those marks is trusted on its own. A mark is set by one hook and cleared
 by another, so a turn that ends without a Stop hook — you esc out of a prompt,
-you decline a question — used to strand the session on red for good. The bar
+you decline a question — used to strand the session on waiting for good. The bar
 reads the bottom of each pane every poll and lets the screen decide whether the
 agent is actually working and whether a prompt is actually up. What the hook
 adds on top is the part the screen can't show: that a stopped session is
 *unread* rather than merely idle.
 
-So without the hook the bar still gets 🟡, ⚪ and a dialog's 🔴 right — it just can't tell 🟢 apart from a session sitting quietly, and it can't count subagents.
+So without the hook the bar still gets 🟡, ⚪ and a dialog's 🟣 right — it just can't tell 🟢 apart from a session sitting quietly, and it can't count subagents.
 
 ### sway
 
