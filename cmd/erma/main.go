@@ -146,6 +146,7 @@ type sess struct {
 	st                  state
 	since               int64
 	ctx                 string // @erma_ctx_used: % of the room to auto-compact already spent
+	sub                 int    // subagents running under it (@erma_sub)
 	s, w, p             int
 }
 
@@ -516,14 +517,14 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@erma_wait}", "#{@erma_wait_since}", "#{pane_current_path}", "#{pane_title}",
-		"#{@ctx_label}", "#{@erma_ctx_used}",
+		"#{@ctx_label}", "#{@erma_ctx_used}", "#{@erma_sub}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var recs [][]string
 	var panes []string
 	for _, line := range strings.Split(out, "\n") {
 		c := strings.Split(line, "\t")
-		if len(c) < 10 || c[0] == "" {
+		if len(c) < 11 || c[0] == "" {
 			continue
 		}
 		recs, panes = append(recs, c), append(panes, c[0])
@@ -558,7 +559,7 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 		}
 		rows = append(rows, sess{
 			pane: c[0], sessWin: c[1] + ":" + c[2], name: name,
-			mark: wait, st: st, since: since, ctx: strings.TrimSpace(c[9]),
+			mark: wait, st: st, since: since, ctx: strings.TrimSpace(c[9]), sub: len(strings.Fields(c[10])),
 			s: atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
 		})
 	}
@@ -1343,21 +1344,24 @@ func metaColorOf(it sess, sel bool, th theme) lipgloss.Color {
 		return th.meta
 	}
 }
+
+// metaLine: the state tag, the subagents it has running (⤷N), how long it has
+// sat. Each part only when there is one.
 func metaLine(it sess) string {
-	age, tag := fmtAge(it.since), ""
+	var parts []string
 	switch it.st {
 	case urgent:
-		tag = "PERM"
+		parts = append(parts, "PERM")
 	case done:
-		tag = "DONE"
+		parts = append(parts, "DONE")
 	}
-	switch {
-	case tag == "":
-		return age
-	case age == "":
-		return tag
+	if it.sub > 0 {
+		parts = append(parts, "⤷"+strconv.Itoa(it.sub))
 	}
-	return tag + " · " + age
+	if age := fmtAge(it.since); age != "" {
+		parts = append(parts, age)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // Everything downstream of erma-ctx counts the same direction: how much of the

@@ -163,13 +163,31 @@ func TestListTopMatchesRender(t *testing.T) {
 	}
 }
 
+func TestMetaLine(t *testing.T) {
+	now := time.Now().Unix()
+	for _, c := range []struct {
+		name string
+		it   sess
+		want string
+	}{
+		{"idle, no age", sess{st: idle}, ""},
+		{"done", sess{st: done, since: now - 120}, "DONE · 2m"},
+		{"working with subagents", sess{st: proc, since: now - 120, sub: 3}, "⤷3 · 2m"},
+		{"waiting on you, one subagent", sess{st: urgent, sub: 1}, "PERM · ⤷1"},
+	} {
+		if got := metaLine(c.it); got != c.want {
+			t.Errorf("%s: metaLine = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // Every rendered row must fit rowW: one cell over and lipgloss wraps it onto a
 // second line, which shifts everything below it and breaks hitTest.
 func TestRowsFitWidth(t *testing.T) {
 	rows := []sess{
 		{pane: "%1", name: "dados financeiros no bigquery", st: idle, w: 6, since: 1},
 		{pane: "%2", name: "abel", st: urgent, w: 12, since: 1},
-		{pane: "%3", name: "dai/compact-warn", st: done, w: 3, since: 1, ctx: "88"},
+		{pane: "%3", name: "dai/compact-warn", st: done, w: 3, since: 1, ctx: "88", sub: 12},
 	}
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {

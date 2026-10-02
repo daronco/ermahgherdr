@@ -6,7 +6,7 @@ reimplement them in whatever your setup already uses.
 
 | Script | Needs | What it does |
 |---|---|---|
-| `erma-hook` | tmux | Claude Code hook that publishes each session's live state. Without it the 🔴 permission state never shows. |
+| `erma-hook` | tmux (jq for the subagent count) | Claude Code hook that publishes each session's live state. Without it 🟢 and the subagent count never show. |
 | `erma-ctx` | tmux, jq | Claude Code `statusLine` segment with the context left before auto-compact; flags the session in the bar when it runs low. |
 | `erma-open` | sway, [foot](https://codeberg.org/dnkl/foot) | Opens the bar, or focuses it if already open, in a window tagged with a stable `app_id`. |
 | `erma-sway-focus` | sway, python3 | Records the last focused non-erma window so `Enter` can hand keyboard focus back to it. |
@@ -25,6 +25,7 @@ Everything the helpers do is written to tmux options and one state file:
 | `@erma_wait` (pane) | `erma-hook` | erma | `perm` · `waiting` · `working` |
 | `@erma_wait_since` (pane) | `erma-hook` | erma | unix timestamp of the last change |
 | `@erma_ctx_used` (pane) | `erma-ctx` | erma | % of the room to auto-compact already spent, republished on every change · erma draws it as a meter |
+| `@erma_sub` (pane) | `erma-hook` | erma | space-separated ids of the subagents running · erma shows the count as `⤷N` |
 | `@erma_sound` (global) | erma (`s` key / ♫ chip) | `erma-hook` | `on` · anything else = off |
 | `$XDG_RUNTIME_DIR/erma-last-term` | `erma-sway-focus` | erma | sway `con_id` of the last real terminal |
 

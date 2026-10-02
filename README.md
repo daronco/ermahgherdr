@@ -53,6 +53,8 @@ only N% of the context is left. It sits beside the status color, never instead o
 it, and shows up only while the session is low (≤ 15% by default) — see the
 context segment below.
 
+**⤷N** on the time line means that session has N subagents running.
+
 Cyan means only *you*: the selection band, the current-session arrow, and the
 focused-header underline. When the bar has keyboard focus the little 👾 at the
 bottom raises its hands.
@@ -105,7 +107,9 @@ auto-compact" number and flags the session in the bar when it runs low
   "hooks": {
     "Stop":             [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook stop" }] }],
     "Notification":     [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook notify" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook submit" }] }]
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook submit" }] }],
+    "SubagentStart":    [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook substart" }] }],
+    "SubagentStop":     [{ "hooks": [{ "type": "command", "command": "~/.local/bin/erma-hook substop" }] }]
   },
   "statusLine": { "type": "command", "command": "~/.local/bin/erma-ctx" }
 }
@@ -122,8 +126,7 @@ agent is actually working and whether a prompt is actually up. What the hook
 adds on top is the part the screen can't show: that a stopped session is
 *unread* rather than merely idle.
 
-So without the hook the bar still gets 🟡 and ⚪ right — it just can't tell 🔴
-and 🟢 apart from a session sitting quietly.
+So without the hook the bar still gets 🟡, ⚪ and a dialog's 🔴 right — it just can't tell 🟢 apart from a session sitting quietly, and it can't count subagents.
 
 ### sway
 
