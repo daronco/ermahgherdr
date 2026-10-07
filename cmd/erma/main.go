@@ -17,6 +17,11 @@
 // auto-compacted (published by contrib/erma-ctx only while it is low).
 //
 // cyan means only "you": selection band ▐, current-session arrow ▸, focused count.
+//
+// Two marks, set from the right-click menu, move a session instead of coloring
+// it: paused (‖) folds it to one dim line by the counters, priority (★) puts it
+// in the band just past those. They live per Claude session, so they outlive the
+// pane.
 package main
 
 import (
@@ -61,6 +66,13 @@ var (
 	metaSel   = lipgloss.Color("#8a9a9a")
 	badgeFg   = lipgloss.Color("#16191a") // dark text on the (status-colored) badge
 	badgeIdle = lipgloss.Color("#93a3a3") // idle badge bg: light, like the item font
+	cPaused   = lipgloss.Color("#5c6666") // a parked session: there, asking for nothing
+	cPausedMt = lipgloss.Color("#3f4646") // its age, one step quieter
+	cBackdrop = lipgloss.Color("#3a4040") // the list, flattened behind an open menu
+	cShadow   = lipgloss.Color("#121414") // the menu's drop shadow
+	cMenu     = lipgloss.Color("#283131") // inside the menu
+	cMenuAt   = lipgloss.Color("#24494b") // the option under the pointer: cyan, dimmed
+	cHoverBar = lipgloss.Color("#243e40") // the band of the row under the pointer
 )
 
 // badgeBgFor: the window-# badge takes the item's status color (red/amber), or a
@@ -143,6 +155,8 @@ const (
 type sess struct {
 	pane, sessWin, name string
 	mark                string // the pane option, verbatim — "unread" resists auto-read
+	sid                 string // the Claude session id, "" until its registry file is found
+	flag                string // your mark on it: "" · "paused" · "prio"
 	st                  state
 	since               int64
 	ctx                 string // @erma_ctx_used: % of the room to auto-compact already spent
@@ -168,8 +182,30 @@ type model struct {
 	sway     *swayWatch     // the compositor feed: who has focus, are we on screen
 	hidden   bool           // the bar's window is on a workspace nobody is showing
 	anim     bool           // the animation tick is running (see moving)
+	menu     *menu          // the right-click menu, when one is open
+	hover    string         // the pane of the row under the mouse, "" when none
+	hoverAt  time.Time      // the last mouse motion, to retire a hover left behind
 	icache   map[itemKey]string
 	pcache   map[string]string
+}
+
+// menu: the right-click menu, open on one session. It holds the session by pane
+// because a poll can reorder the rows under it.
+type menu struct {
+	pane string
+	at   int  // highlighted option, under the mouse or the keyboard; -1 none
+	held bool // the bar has had the keyboard since it opened
+}
+
+// hoverTTL: the terminal reports the mouse moving, never leaving. A hover with
+// no motion for this long is taken as the pointer gone elsewhere.
+const hoverTTL = 4 * time.Second
+
+type menuOpt struct {
+	icon  string
+	col   lipgloss.Color
+	label string
+	act   func(*model)
 }
 
 // ---------- render cache ----------
@@ -183,11 +219,11 @@ type model struct {
 // itemKey is every input renderItem reads. glyph, meta and age are pre-resolved
 // because they are what fold m.frame, m.pulse and the clock into a row.
 type itemKey struct {
-	pane, name, glyph, meta, age, ctx string
-	glyphCol                          lipgloss.Color
-	st                                state
-	win, rowW, nameW                  int
-	sel, cur, comp                    bool
+	pane, name, glyph, meta, age, ctx, flag string
+	glyphCol                                lipgloss.Color
+	st                                      state
+	win, rowW, nameW                        int
+	sel, cur, comp, hov                     bool
 }
 
 // cacheCap: the age text ticks every second, so keys churn. Dropping the whole
@@ -203,9 +239,10 @@ func (m model) itemLines(it sess, idx int, th theme) string {
 	g, gc := m.glyphRune(it, th)
 	k := itemKey{
 		pane: it.pane, name: it.name, glyph: g, glyphCol: gc,
-		meta: metaLine(it), age: fmtAge(it.since), ctx: it.ctx, st: it.st,
+		meta: metaLine(it), age: fmtAge(it.since), ctx: it.ctx, flag: it.flag, st: it.st,
 		win: it.w, rowW: m.rowW(), nameW: m.nameW(),
 		sel: idx == m.sel, cur: it.pane == m.current, comp: m.comp,
+		hov: it.pane == m.hover && idx != m.sel,
 	}
 	if s, ok := m.icache[k]; ok {
 		return s
@@ -494,6 +531,125 @@ func markUnread(pane string) {
 	run("tmux", "set", "-p", "-t", pane, "@erma_wait", "unread")
 }
 
+// ---------- marks: paused / priority ----------
+
+// flagsPath: the marks you set by hand, keyed by Claude session id. A file and
+// not a pane option, so a mark survives tmux restarting and follows the session
+// into another pane. erma-hook drops "paused" from it when you prompt the session.
+func flagsPath() string {
+	dir := os.Getenv("XDG_STATE_HOME")
+	if dir == "" {
+		dir = filepath.Join(os.Getenv("HOME"), ".local", "state")
+	}
+	return filepath.Join(dir, "erma", "flags.json")
+}
+
+type flagRec struct {
+	Flag  string `json:"flag"`
+	Since int64  `json:"since"`
+}
+
+func loadFlags() map[string]flagRec {
+	m := map[string]flagRec{}
+	if b, err := os.ReadFile(flagsPath()); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+// saveFlag sets one session's mark, "" clearing it. erma-hook takes the same
+// lock to unpause, and the rename means no reader ever sees half a file.
+func saveFlag(sid, fl string) {
+	p := flagsPath()
+	if os.MkdirAll(filepath.Dir(p), 0o755) != nil {
+		return
+	}
+	lk, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return
+	}
+	defer lk.Close()
+	_ = syscall.Flock(int(lk.Fd()), syscall.LOCK_EX)
+	m := loadFlags()
+	if fl == "" {
+		delete(m, sid)
+	} else {
+		m[sid] = flagRec{fl, time.Now().Unix()}
+	}
+	b, _ := json.MarshalIndent(m, "", "  ")
+	if tmp := p + ".tmp"; os.WriteFile(tmp, append(b, '\n'), 0o644) == nil {
+		_ = os.Rename(tmp, p)
+	}
+}
+
+// setPaneFlag mirrors a mark onto the pane as @erma_flag: the tmux tab and
+// erma-hook's sound rules read it there, without parsing the file.
+func setPaneFlag(pane, fl string) {
+	if fl == "" {
+		run("tmux", "set", "-p", "-u", "-t", pane, "@erma_flag")
+	} else {
+		run("tmux", "set", "-p", "-t", pane, "@erma_flag", fl)
+	}
+	run("tmux", "refresh-client", "-S")
+}
+
+// paneSessions maps tmux pane -> Claude session id, from the registry Claude
+// Code keeps as one file per running process. A claude that crashed leaves its
+// file behind, so a file whose process is gone does not count.
+func paneSessions() map[string]string {
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		dir = filepath.Join(os.Getenv("HOME"), ".claude")
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "sessions", "*.json"))
+	out := map[string]string{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var r struct {
+			Pid       int    `json:"pid"`
+			SessionID string `json:"sessionId"`
+			Tmux      string `json:"tmux"` // "0:@8.%16" — session:window.pane
+		}
+		if json.Unmarshal(b, &r) != nil || r.SessionID == "" {
+			continue
+		}
+		i := strings.LastIndexByte(r.Tmux, '.')
+		if i < 0 || syscall.Kill(r.Pid, 0) == syscall.ESRCH {
+			continue
+		}
+		out[r.Tmux[i+1:]] = r.SessionID
+	}
+	return out
+}
+
+// bandOf: which stretch of the list a mark puts a row in, counted from the far
+// end. The unmarked rows sit there, with no heading and first to scroll off;
+// then priority; then the paused, folded to a line each, against the counters.
+func bandOf(fl string) int {
+	switch fl {
+	case "prio":
+		return 1
+	case "paused":
+		return 2
+	}
+	return 0
+}
+
+// arrange orders rows by band and keeps tmux order inside each. The far end is
+// the top of the screen bottom-up, and the bottom with --top.
+func arrange(rows []sess, top bool) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := bandOf(rows[i].flag), bandOf(rows[j].flag)
+		if top {
+			return a > b
+		}
+		return a < b
+	})
+}
+
 func cleanName(title, path string) string {
 	t := strings.TrimSpace(title)
 	for len(t) > 0 {
@@ -517,20 +673,21 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@erma_wait}", "#{@erma_wait_since}", "#{pane_current_path}", "#{pane_title}",
-		"#{@ctx_label}", "#{@erma_ctx_used}", "#{@erma_sub}",
+		"#{@ctx_label}", "#{@erma_ctx_used}", "#{@erma_sub}", "#{@erma_flag}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var recs [][]string
 	var panes []string
 	for _, line := range strings.Split(out, "\n") {
 		c := strings.Split(line, "\t")
-		if len(c) < 11 || c[0] == "" {
+		if len(c) < 12 || c[0] == "" {
 			continue
 		}
 		recs, panes = append(recs, c), append(panes, c[0])
 	}
 	poll := pollPanes(panes)
 	screens := poll.screens
+	flags, sids := loadFlags(), paneSessions()
 	now := time.Now().Unix()
 	var rows []sess
 	for _, c := range recs {
@@ -557,8 +714,16 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 		if name == "" {
 			name = cleanName(c[7], c[6])
 		}
+		sid := sids[c[0]]
+		fl := ""
+		if sid != "" {
+			fl = flags[sid].Flag
+		}
+		if fl != c[11] { // erma-hook unpaused it, or the pane is new to the mark
+			setPaneFlag(c[0], fl)
+		}
 		rows = append(rows, sess{
-			pane: c[0], sessWin: c[1] + ":" + c[2], name: name,
+			pane: c[0], sessWin: c[1] + ":" + c[2], name: name, sid: sid, flag: fl,
 			mark: wait, st: st, since: since, ctx: strings.TrimSpace(c[9]), sub: len(strings.Fields(c[10])),
 			s: atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
 		})
@@ -1026,6 +1191,7 @@ func (m *model) refresh() {
 	}
 	var poll tmuxPoll
 	m.rows, poll = gather(m.permMiss)
+	arrange(m.rows, m.top)
 	m.focused, m.termFoc = detectFocus(m.sway, poll.clients)
 	m.current = poll.current
 	m.sound = poll.sound
@@ -1065,9 +1231,24 @@ func (m *model) refresh() {
 	if m.sel >= len(m.rows) {
 		m.sel = max(0, len(m.rows)-1)
 	}
+	if m.hover != "" && time.Since(m.hoverAt) > hoverTTL {
+		m.hover = ""
+	}
+	// An open menu holds the cursor on its session. It closes if that session is
+	// gone, or once the bar loses the keyboard — you clicked somewhere else.
+	if m.menu != nil {
+		if m.focused {
+			m.menu.held = true
+		}
+		if i := m.menuIdx(); i >= 0 && (m.focused || !m.menu.held) {
+			m.sel = i
+		} else {
+			m.menu = nil
+		}
+	}
 	// selection follows the actually-current pane, so switching panes in tmux
 	// moves the cursor too — coming back to the bar it never "jumps" to a stale item.
-	if m.current != "" {
+	if m.current != "" && m.menu == nil {
 		for i, r := range m.rows {
 			if r.pane == m.current {
 				m.sel = i
@@ -1085,8 +1266,8 @@ func (m *model) recomputeDensity() {
 		return
 	}
 	tall := 0
-	for _, it := range m.rows {
-		tall += m.itemHeight(it, false) // an item's padding is inside it; no gap
+	for i, it := range m.rows {
+		tall += m.leadN(i) + m.itemHeight(it, false) // an item's padding is inside it
 	}
 	if !m.comp && tall > avail {
 		m.comp = true
@@ -1129,8 +1310,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		clear(m.pcache) // keyed by line content, which says nothing about width
 		return m, nil
 	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionMotion {
+			m.hoverAt = time.Now()
+			if m.menu != nil {
+				m.menu.at = m.menuHit(msg.X, msg.Y)
+				return m, nil
+			}
+			// Passing the right edge is the pointer on its way out of the bar.
+			m.hover = ""
+			if idx := m.hitTest(msg.Y); idx >= 0 && msg.X < m.rowW()-1 {
+				m.hover = m.rows[idx].pane
+			}
+			return m, nil
+		}
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
+		}
+		if m.menu != nil {
+			if k := m.menuHit(msg.X, msg.Y); k >= 0 {
+				m.pick(k)
+				return m, nil
+			}
+			m.menu = nil // a click anywhere else closes it; a right-click opens another
+			if msg.Button != tea.MouseButtonRight {
+				return m, nil
+			}
 		}
 		switch msg.Button {
 		case tea.MouseButtonLeft:
@@ -1143,11 +1347,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.MouseButtonRight:
 			if idx := m.hitTest(msg.Y); idx >= 0 {
 				m.sel = idx
-				m.unread()
+				m.hover = ""
+				m.menu = &menu{pane: m.rows[idx].pane, at: -1, held: m.focused}
+			}
+		case tea.MouseButtonMiddle:
+			if idx := m.hitTest(msg.Y); idx >= 0 {
+				m.sel = idx
+				m.toggleRead()
 			}
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.menu != nil {
+			switch msg.String() {
+			case "up", "k":
+				m.menu.at = max(0, m.menu.at-1)
+				return m, nil
+			case "down", "j":
+				m.menu.at = min(len(m.menuOpts())-1, m.menu.at+1)
+				return m, nil
+			case "enter":
+				if m.menu.at >= 0 {
+					m.pick(m.menu.at)
+				}
+				return m, nil
+			case "esc":
+				m.menu = nil
+				return m, nil
+			}
+			m.menu = nil // any other key closes it and does what it always does
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -1158,6 +1387,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toggleSound()
 		case "u", "U":
 			m.unread()
+		case "p", "P":
+			m.toggleFlag("paused")
+		case "o", "O":
+			m.toggleFlag("prio")
 		case "up", "k":
 			if m.sel > 0 {
 				m.sel--
@@ -1193,13 +1426,103 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// unread: put the green back on the selected session. Right-click does the same
-// to whatever is under the pointer.
+// unread: put the green back on the selected session.
 func (m *model) unread() {
 	if s, ok := m.cur(); ok {
 		markUnread(s.pane)
 		m.rows[m.sel].mark, m.rows[m.sel].st = "unread", done
 	}
+}
+
+// read clears the green on the selected session without jumping to it.
+func (m *model) read() {
+	if s, ok := m.cur(); ok {
+		markRead(s.pane)
+		m.rows[m.sel].mark = "waiting"
+		if s.st == done {
+			m.rows[m.sel].st = idle
+		}
+	}
+}
+
+// toggleRead flips the selected session between read and unread: the middle
+// click, and the menu's first entry.
+func (m *model) toggleRead() {
+	if s, ok := m.cur(); ok && s.st == done {
+		m.read()
+	} else {
+		m.unread()
+	}
+}
+
+// menuOpts: what the menu offers for its session. Each entry names what it will
+// do, so a mark already set reads as the way to take it off.
+func (m model) menuOpts() []menuOpt {
+	i := m.menuIdx()
+	if i < 0 {
+		return nil
+	}
+	s := m.rows[i]
+	opts := []menuOpt{{"✓", cDone, "unread", (*model).toggleRead}}
+	if s.st == done {
+		opts[0].icon, opts[0].col, opts[0].label = "○", badgeIdle, "read"
+	}
+	pause := menuOpt{"‖", metaSel, "pause", func(m *model) { m.toggleFlag("paused") }}
+	if s.flag == "paused" {
+		pause.label = "resume"
+	}
+	prio := menuOpt{"★", themeFor(false).white, "prio", func(m *model) { m.toggleFlag("prio") }}
+	if s.flag == "prio" {
+		prio.label = "drop prio"
+	}
+	return append(opts, pause, prio)
+}
+
+// menuIdx: the row the menu is open on, -1 when there is none.
+func (m model) menuIdx() int {
+	if m.menu == nil {
+		return -1
+	}
+	for i, r := range m.rows {
+		if r.pane == m.menu.pane {
+			return i
+		}
+	}
+	return -1
+}
+
+// pick runs option k on the menu's session and closes the menu.
+func (m *model) pick(k int) {
+	opts, i := m.menuOpts(), m.menuIdx()
+	m.menu = nil
+	if i < 0 || k < 0 || k >= len(opts) {
+		return
+	}
+	m.sel = i
+	opts[k].act(m)
+}
+
+// toggleFlag marks the selected session, or clears the mark it already has. One
+// mark at a time: pausing a priority session drops its priority.
+func (m *model) toggleFlag(fl string) {
+	s, ok := m.cur()
+	if !ok || s.sid == "" {
+		return // no registry file for it yet: nothing to key the mark by
+	}
+	if s.flag == fl {
+		fl = ""
+	}
+	saveFlag(s.sid, fl)
+	setPaneFlag(s.pane, fl)
+	m.rows[m.sel].flag = fl
+	arrange(m.rows, m.top)
+	for i, r := range m.rows { // the row moved band; the cursor goes with it
+		if r.pane == s.pane {
+			m.sel = i
+			break
+		}
+	}
+	m.recomputeDensity()
 }
 
 func (m *model) jump() {
@@ -1229,8 +1552,12 @@ func (m model) nameW() int {
 	return 8
 }
 
+// nameLines: a priority row gives the ★ two cells of the name column.
 func (m model) nameLines(it sess) []string {
 	nw := m.nameW()
+	if it.flag == "prio" {
+		nw -= 2
+	}
 	disp := midTruncate(strings.ToLower(it.name), nw*2)
 	return wrapN(disp, nw, 2)
 }
@@ -1238,7 +1565,7 @@ func (m model) nameLines(it sess) []string {
 // hasMeta: does this item have a bottom (time/PERM) line? Urgent always does;
 // others only when there's a recorded age — no empty line eating space.
 func (m model) itemHeight(it sess, comp bool) int {
-	if comp {
+	if comp || it.flag == "paused" {
 		return 1
 	}
 	// names + the second line (tmux window number + time) + top & bottom pad
@@ -1256,10 +1583,31 @@ func (m model) listTop() int {
 		return chromeRows
 	}
 	tall := 0
-	for _, it := range m.rows {
-		tall += m.itemHeight(it, m.comp)
+	for i, it := range m.rows {
+		tall += m.leadN(i) + m.itemHeight(it, m.comp)
 	}
 	return m.h - chromeRows - tall // negative when it overflows: rows scroll off the top
+}
+
+// lead: what is drawn above item i that belongs to no session — a blank where
+// one band ends and the next begins, and a heading over each marked band.
+func (m model) lead(i int) (gap, head bool) {
+	fl := m.rows[i].flag
+	gap = i > 0 && bandOf(m.rows[i-1].flag) != bandOf(fl)
+	head = fl != "" && (i == 0 || m.rows[i-1].flag != fl)
+	return gap, head
+}
+
+func (m model) leadN(i int) int {
+	gap, head := m.lead(i)
+	n := 0
+	if gap {
+		n++
+	}
+	if head {
+		n++
+	}
+	return n
 }
 
 // soundRow: the row the counter line is drawn on — where the sound badge sits,
@@ -1275,6 +1623,7 @@ func (m model) soundRow() int {
 func (m model) hitTest(y int) int {
 	row := m.listTop()
 	for i, it := range m.rows {
+		row += m.leadN(i)
 		hh := m.itemHeight(it, m.comp)
 		if y >= row && y < row+hh {
 			return i
@@ -1282,6 +1631,133 @@ func (m model) hitTest(y int) int {
 		row += hh // padding lives inside the item now; no separate gap
 	}
 	return -1
+}
+
+// itemTop: the screen row item i's block starts on.
+func (m model) itemTop(i int) int {
+	row := m.listTop()
+	for j := 0; j < i; j++ {
+		row += m.leadN(j) + m.itemHeight(m.rows[j], m.comp)
+	}
+	return row + m.leadN(i)
+}
+
+// menuTop: the row the menu's box starts on. It opens under its session, or
+// over it when there is no room below, and never over the counters — shadow
+// included, which must not land on the session either.
+func (m model) menuTop() int {
+	i := m.menuIdx()
+	if i < 0 {
+		return -1
+	}
+	lo, hi := 0, m.h-chromeRows
+	if m.top {
+		lo, hi = chromeRows, m.h
+	}
+	n := len(m.menuOpts()) + 3 // the box, and its shadow under it
+	y := m.itemTop(i) + m.itemHeight(m.rows[i], m.comp)
+	if y+n > hi {
+		y = m.itemTop(i) - n
+	}
+	return max(lo, min(y, hi-n))
+}
+
+// menuW: the card's width — as wide as its longest label needs, no wider, so it
+// reads as a thing on top of the list and not one more row of it.
+func (m model) menuW() int {
+	lw := 0
+	for _, o := range m.menuOpts() {
+		lw = max(lw, utf8.RuneCountInString(o.label))
+	}
+	return min(lw+6, m.rowW()-1)
+}
+
+// menuX: the card's left column, centered with room for its shadow.
+func (m model) menuX() int { return max(0, (m.rowW()-m.menuW()-1)/2) }
+
+// menuHit: the option under the pointer, -1 when it is not on one.
+func (m model) menuHit(x, y int) int {
+	top, x0 := m.menuTop(), m.menuX()
+	if top < 0 || x <= x0 || x >= x0+m.menuW()-1 {
+		return -1
+	}
+	if k := y - top - 1; k >= 0 && k < len(m.menuOpts()) {
+		return k
+	}
+	return -1
+}
+
+// menuLines: the card, menuW cells per line — a cyan outline on the dimmed
+// list, filled inside, the option under the pointer lit.
+func (m model) menuLines(th theme) []string {
+	bw := m.menuW()
+	edge := lipgloss.NewStyle().Foreground(th.focus).Background(th.panel)
+	lines := []string{edge.Render("╭" + strings.Repeat("─", bw-2) + "╮")}
+	for k, o := range m.menuOpts() {
+		bg, lc, bold := cMenu, th.calm, false
+		if k == m.menu.at {
+			bg, lc, bold = cMenuAt, th.white, true
+		}
+		c := func(f lipgloss.Color, s string, b bool) string {
+			return lipgloss.NewStyle().Foreground(f).Background(bg).Bold(b).Render(s)
+		}
+		lines = append(lines, edge.Render("│")+c(lc, " ", false)+c(o.col, o.icon, true)+
+			c(lc, " "+padR(midTruncate(o.label, bw-6), bw-6)+" ", bold)+edge.Render("│"))
+	}
+	return append(lines, edge.Render("╰"+strings.Repeat("─", bw-2)+"╯"))
+}
+
+// sgr matches the colour codes lipgloss writes, to flatten a line behind the menu.
+var sgr = regexp.MustCompile("\x1b\\[[0-9;:]*m")
+
+// cellsOf: a plain line as one string per terminal column, padded to w. A wide
+// rune keeps its column and leaves an empty string in the next one.
+func cellsOf(s string, w int) []string {
+	var out []string
+	for _, r := range s {
+		out = append(out, string(r))
+		if lipgloss.Width(string(r)) == 2 {
+			out = append(out, "")
+		}
+	}
+	for len(out) < w {
+		out = append(out, " ")
+	}
+	return out[:w]
+}
+
+// overlay floats the menu over the bar. Everything behind it goes flat and dim
+// except the session it is open on, and the card casts a shadow: it has to read
+// as above the list, not as one more row in it.
+func (m model) overlay(rows []string, th theme) []string {
+	i := m.menuIdx()
+	if i < 0 {
+		return rows
+	}
+	rw, keep := m.rowW(), m.itemTop(i)
+	keepEnd := keep + m.itemHeight(m.rows[i], m.comp)
+	dim := lipgloss.NewStyle().Foreground(cBackdrop).Background(th.panel)
+	shade := lipgloss.NewStyle().Background(cShadow)
+	flat := func(cs []string) string { return dim.Render(strings.Join(cs, "")) }
+	box, x0, y0, bw := m.menuLines(th), m.menuX(), m.menuTop(), m.menuW()
+	for y := range rows {
+		on := y >= y0 && y <= y0+len(box) // the card's rows, and its shadow's
+		if !on && y >= keep && y < keepEnd {
+			continue
+		}
+		cs := cellsOf(sgr.ReplaceAllString(rows[y], ""), rw)
+		switch k := y - y0; {
+		case !on:
+			rows[y] = flat(cs)
+		case k == 0:
+			rows[y] = flat(cs[:x0]) + box[0] + flat(cs[x0+bw:])
+		case k < len(box):
+			rows[y] = flat(cs[:x0]) + box[k] + shade.Render(" ") + flat(cs[x0+bw+1:])
+		default:
+			rows[y] = flat(cs[:x0+1]) + shade.Render(strings.Repeat(" ", bw)) + flat(cs[x0+bw+1:])
+		}
+	}
+	return rows
 }
 
 // ---------- render ----------
@@ -1314,18 +1790,28 @@ func (m model) glyphRune(it sess, th theme) (string, lipgloss.Color) {
 		return "○", th.spin
 	}
 }
+
+// nameColor: priority speaks in weight, and lifts a quiet name to white — never
+// in a hue of its own, since hue is what the states use.
 func nameColor(it sess, sel bool, th theme) (lipgloss.Color, bool) {
+	prio := it.flag == "prio"
 	if sel {
-		return th.white, it.st == urgent
+		return th.white, it.st == urgent || prio
 	}
 	switch it.st {
 	case urgent:
 		return lblUrgent, true
 	case done:
-		return lblDone, false
+		return lblDone, prio
 	case proc:
+		if prio {
+			return th.white, true
+		}
 		return lblAmber, false
 	default:
+		if prio {
+			return th.white, true
+		}
 		return th.calm, false
 	}
 }
@@ -1476,9 +1962,17 @@ func rowBg(it sess, sel bool, th theme) lipgloss.Color {
 }
 
 func (m model) renderItem(it sess, idx int, th theme) string {
+	parked := it.flag == "paused"
+	if parked && it.st == done {
+		it.st = idle // a finished answer in a paused session waits quietly for you
+	}
 	sel := idx == m.sel
 	nw := m.nameW()
 	rbg := rowBg(it, sel, th)
+	hov := it.pane == m.hover && !sel
+	if hov { // the pointer is on it: a click jumps here
+		rbg = ctxShade(rbg, 0x06)
+	}
 	nc, bold := nameColor(it, sel, th)
 	// every cell bakes the row bg, so there are no reset "holes" in the fill.
 	c := func(f lipgloss.Color, s string, b bool) string {
@@ -1489,15 +1983,33 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 	band := c(rbg, " ", false)
 	if sel {
 		band = c(th.focus, "▐", false)
+	} else if hov {
+		band = c(cHoverBar, "▐", false)
 	}
 	gg, gc := m.glyphRune(it, th)
+	star, sw := "", 0 // a priority row's ★, and the name cells it takes
+	if it.flag == "prio" {
+		star, sw = c(th.white, "★", true)+c(rbg, " ", false), 2
+	}
 
-	if m.comp { // 1 line: gutter + name + time(right) + arrow
+	// 1 line: gutter + name + time(right) + arrow. A paused row is always this
+	// shape, dimmed; only a dialog still speaks up in it, since an agent stuck
+	// waiting on you is real in any session.
+	if m.comp || parked {
 		// gutter 5 + a space + the 4-cell age + the arrow: 11, not 10. Being one
 		// over made lipgloss wrap the row onto a second line.
-		nwC := max(4, m.rowW()-5-1-4-1)
+		nwC := max(4, m.rowW()-5-1-4-1) - sw
 		nm := midTruncate(strings.ToLower(it.name), nwC)
 		age, agec := padL(fmtAge(it.since), 4), metaColorOf(it, sel, th)
+		if parked && it.st != urgent {
+			nc, bold, agec = cPaused, false, cPausedMt
+			if sel {
+				nc = th.calm
+			}
+			if it.st == idle {
+				gg, gc = "‖", cPaused
+			}
+		}
 		if tag := ctxTag(it); tag != "" { // running out of room beats how long it has sat
 			age, agec = padL(tag, 4), cCtx
 		}
@@ -1505,7 +2017,7 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		if it.pane == m.current {
 			arrow = c(th.focus, "➤", false)
 		}
-		line := band + spine + c(rbg, " ", false) + c(gc, gg, false) + c(rbg, " ", false) +
+		line := band + spine + c(rbg, " ", false) + c(gc, gg, false) + c(rbg, " ", false) + star +
 			c(nc, padR(nm, nwC), bold) + c(rbg, " ", false) +
 			c(agec, age, false) + arrow
 		return lipgloss.NewStyle().Width(m.rowW()).Background(rbg).Render(line)
@@ -1518,7 +2030,14 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		if li == 0 {
 			glyph = c(gc, gg, false) + c(rbg, " ", false)
 		}
-		lines = append(lines, band+spine+c(rbg, " ", false)+glyph+c(nc, padR(nm, nw), bold))
+		if sw > 0 {
+			if li == 0 {
+				glyph += star
+			} else {
+				glyph += c(rbg, "  ", false)
+			}
+		}
+		lines = append(lines, band+spine+c(rbg, " ", false)+glyph+c(nc, padR(nm, nw-sw), bold))
 	}
 	// second line: the time (gutter cols 3-5 empty). The low-context mark stays a
 	// compact-mode thing — here the meter below already carries the same number,
@@ -1590,14 +2109,17 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 	return lipgloss.NewStyle().Width(m.rowW()).Background(rbg).Render(strings.Join(lines, "\n"))
 }
 
-func (m model) counts() (u, d, p, i int) {
+// counts: a paused session counts as paused, unless it is waiting on you.
+func (m model) counts() (u, d, p, i, z int) {
 	for _, it := range m.rows {
-		switch it.st {
-		case urgent:
+		switch {
+		case it.st == urgent:
 			u++
-		case done:
+		case it.flag == "paused":
+			z++
+		case it.st == done:
 			d++
-		case proc:
+		case it.st == proc:
 			p++
 		default:
 			i++
@@ -1606,15 +2128,62 @@ func (m model) counts() (u, d, p, i int) {
 	return
 }
 
-// legend: the widest key hint that fits. A row one cell over its width gets
-// wrapped by lipgloss, and everything below it shifts.
+// legendKeys: what the legend names — a glyph, the word, and where in the word
+// its key is.
+var legendKeys = []struct {
+	glyph, word string
+	at          int
+}{{"✓", "unread", 0}, {"‖", "pause", 0}, {"★", "prio", 3}}
+
+// legend: the widest key hint that fits — each glyph and its word with the key
+// letter in bold, or, when even that is too wide, the glyphs and letters alone.
+// A row one cell over its width gets wrapped by lipgloss.
 func (m model) legend() string {
-	for _, s := range []string{"↑↓ move  ⏎ go  u unread", "↑↓ ⏎ go  u unread", "⏎ go  u unread", "⏎ · u"} {
-		if utf8.RuneCountInString(s)+1 <= m.rowW() {
-			return " " + s
+	th := themeFor(false)
+	calm := lipgloss.NewStyle().Foreground(th.calm)
+	key := lipgloss.NewStyle().Foreground(th.white).Bold(true)
+	for _, v := range []struct {
+		sep   string
+		short bool
+	}{{"  ", false}, {" ", false}, {" ", true}} {
+		var plain, out []string
+		for _, k := range legendKeys {
+			word, at := k.word, k.at
+			if v.short {
+				word, at = word[at:at+1], 0
+			}
+			plain = append(plain, k.glyph+" "+word)
+			out = append(out, calm.Render(k.glyph+" "+word[:at])+key.Render(word[at:at+1])+calm.Render(word[at+1:]))
+		}
+		if utf8.RuneCountInString(strings.Join(plain, v.sep))+1 <= m.rowW() {
+			return calm.Render(" ") + strings.Join(out, calm.Render(v.sep))
 		}
 	}
 	return ""
+}
+
+// bandHead: the heading over a marked band — its glyph, its name and how many,
+// then the thin rule out to the edge.
+func (m model) bandHead(fl string, th theme) string {
+	n := 0
+	for _, r := range m.rows {
+		if r.flag == fl {
+			n++
+		}
+	}
+	icon, ic, label, lc := "‖", cPaused, "paused", cPaused
+	if fl == "prio" {
+		icon, ic, label, lc = "★", th.white, "prio", th.calm
+	}
+	txt := fmt.Sprintf("%s · %d", label, n)
+	if utf8.RuneCountInString(txt)+4 > m.rowW() {
+		txt = strconv.Itoa(n) // a narrow bar keeps the count, the glyph names the band
+	}
+	s := " " + lipgloss.NewStyle().Foreground(ic).Bold(true).Render(icon) + " " + fg(lc, txt) + " "
+	if w := m.rowW() - lipgloss.Width(s) - 1; w > 0 {
+		s += fg(lipgloss.Color("#2a3030"), strings.Repeat("─", w))
+	}
+	return s
 }
 
 // rule: the thin separator. It divides the key legend from the list, and it is
@@ -1671,7 +2240,7 @@ func (m model) header() (content, rule string) {
 	// left cluster: the breakdown by state (number before glyph) sits right next
 	// to the logo + total, split by a faint │ — so the top row tells you *what*
 	// the N sessions are, at a glance. Zero categories are omitted.
-	u, d, p, i := m.counts()
+	u, d, p, i, z := m.counts()
 	var parts []string
 	if u > 0 {
 		parts = append(parts, fg(cUrgent, fmt.Sprintf("%d●", u)))
@@ -1684,6 +2253,9 @@ func (m model) header() (content, rule string) {
 	}
 	if i > 0 {
 		parts = append(parts, fg(lipgloss.Color("#5a5a5a"), fmt.Sprintf("%d○", i)))
+	}
+	if z > 0 {
+		parts = append(parts, fg(cPaused, fmt.Sprintf("‖%d", z)))
 	}
 	left := mascot + count
 	if len(parts) > 0 {
@@ -1727,6 +2299,13 @@ func (m model) View() string {
 		list = []string{" " + fg(th.meta, "no claude"), " " + fg(th.meta, "sessions")}
 	} else {
 		for idx, it := range m.rows {
+			gap, head := m.lead(idx)
+			if gap {
+				list = append(list, "")
+			}
+			if head {
+				list = append(list, m.bandHead(it.flag, th))
+			}
 			list = append(list, strings.Split(m.itemLines(it, idx, th), "\n")...)
 		}
 	}
@@ -1736,7 +2315,7 @@ func (m model) View() string {
 	// to explain and drops out.
 	foot := []string{"", rule, head, ""}
 	if len(m.rows) > 0 {
-		foot = []string{"", m.rule(), fg(th.calm, m.legend()), rule, head, ""}
+		foot = []string{"", m.rule(), m.legend(), rule, head, ""}
 	}
 	// The mascot is decoration and yields whole — a cropped one reads as a
 	// glitch, not as a mascot. It needs its padding and a row of gap to earn
@@ -1773,6 +2352,9 @@ func (m model) View() string {
 		} else {
 			rows = rows[over:]
 		}
+	}
+	if m.menu != nil {
+		rows = m.overlay(rows, th)
 	}
 	if m.pcache == nil {
 		return panel(th, m.w, m.h, strings.Join(rows, "\n"))
@@ -1876,7 +2458,7 @@ func main() {
 		icache: map[itemKey]string{}, pcache: map[string]string{}}
 	m.refresh()
 	m.anim = true // Init starts the tick; the first animMsg decides if it lives
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	fm, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

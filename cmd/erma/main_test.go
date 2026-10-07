@@ -188,11 +188,14 @@ func TestRowsFitWidth(t *testing.T) {
 		{pane: "%1", name: "dados financeiros no bigquery", st: idle, w: 6, since: 1},
 		{pane: "%2", name: "abel", st: urgent, w: 12, since: 1},
 		{pane: "%3", name: "dai/compact-warn", st: done, w: 3, since: 1, ctx: "88", sub: 12},
+		{pane: "%4", name: "portal/2747-ident", st: proc, w: 4, since: 1, flag: "prio"},
+		{pane: "%6", name: "hovered", st: done, w: 7, since: 1},
+		{pane: "%5", name: "abel/lgpd-export", st: urgent, w: 5, since: 1, flag: "paused"},
 	}
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
 		for _, w := range []int{27, 40, 14} {
-			m := model{w: w, h: 40, comp: comp, rows: rows, current: "%1"}
+			m := model{w: w, h: 40, comp: comp, rows: rows, current: "%1", hover: "%6"}
 			for idx, it := range m.rows {
 				for _, ln := range strings.Split(m.renderItem(it, idx, th), "\n") {
 					if got := lipgloss.Width(ln); got > m.rowW() {
@@ -423,5 +426,134 @@ func TestCtxMeterWidth(t *testing.T) {
 	}
 	if _, track := ctxMeter(100, 12); track != "" {
 		t.Errorf("used=100 should leave no track, got %q", track)
+	}
+}
+
+// From the far end: unmarked, priority, paused against the counters; inside a
+// band, tmux order holds.
+func TestArrange(t *testing.T) {
+	names := func(rows []sess) string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.name)
+		}
+		return strings.Join(out, " ")
+	}
+	mk := func() []sess {
+		return []sess{
+			{name: "a", flag: "prio"}, {name: "b"}, {name: "c", flag: "paused"},
+			{name: "d"}, {name: "e", flag: "prio"}, {name: "f", flag: "paused"},
+		}
+	}
+	rows := mk()
+	arrange(rows, false)
+	if got := names(rows); got != "b d a e c f" {
+		t.Errorf("bottom-up: %q", got)
+	}
+	rows = mk()
+	arrange(rows, true)
+	if got := names(rows); got != "c f a e b d" {
+		t.Errorf("top-down: %q", got)
+	}
+}
+
+// The band headings and gaps are rows that belong to no session; a click on a
+// session's name has to land on that session in both layouts and densities.
+func TestHitTestMatchesBands(t *testing.T) {
+	base := []sess{
+		{pane: "%1", name: "alphamark", st: idle, w: 1, flag: "paused"},
+		{pane: "%2", name: "betamark", st: done, w: 2},
+		{pane: "%3", name: "gammamark", st: proc, w: 3, flag: "prio"},
+		{pane: "%4", name: "deltamark", st: urgent, w: 4, flag: "paused"},
+		{pane: "%5", name: "epsilonmark", st: idle, w: 5},
+	}
+	for _, top := range []bool{false, true} {
+		for _, h := range []int{60, 24} {
+			rows := append([]sess(nil), base...)
+			arrange(rows, top)
+			m := model{w: 28, h: h, top: top, rows: rows}
+			m.recomputeDensity()
+			lines := strings.Split(m.View(), "\n")
+			for idx, it := range m.rows {
+				y := -1
+				for i, ln := range lines {
+					if strings.Contains(ln, it.name) {
+						y = i
+						break
+					}
+				}
+				if y < 0 {
+					continue // scrolled off
+				}
+				if got := m.hitTest(y); got != idx {
+					t.Errorf("top=%v h=%d comp=%v: %s drawn at %d, hitTest says %d, want %d",
+						top, h, m.comp, it.name, y, got, idx)
+				}
+			}
+		}
+	}
+}
+
+func TestBandHeadFits(t *testing.T) {
+	rows := []sess{{flag: "paused"}, {flag: "prio"}}
+	for _, w := range []int{14, 27, 40} {
+		m := model{w: w, rows: rows}
+		for _, fl := range []string{"paused", "prio"} {
+			if got := lipgloss.Width(m.bandHead(fl, themeFor(false))); got > m.rowW() {
+				t.Errorf("w=%d %s: heading is %d wide, rowW is %d", w, fl, got, m.rowW())
+			}
+		}
+	}
+}
+
+// The menu has to stay inside the list area, off the counters, and leave its
+// session's name in view — in both layouts, for a session at either end.
+func TestMenuPlacement(t *testing.T) {
+	base := []sess{
+		{pane: "%1", name: "alphamark", st: idle, w: 1},
+		{pane: "%2", name: "betamark", st: done, w: 2, flag: "prio"},
+		{pane: "%3", name: "gammamark", st: idle, w: 3, flag: "paused"},
+		{pane: "%4", name: "deltamark", st: proc, w: 4},
+	}
+	for _, top := range []bool{false, true} {
+		rows := append([]sess(nil), base...)
+		arrange(rows, top)
+		m := model{w: 28, h: 50, top: top, rows: rows}
+		m.recomputeDensity()
+		lo, hi := 0, m.h-chromeRows
+		if top {
+			lo, hi = chromeRows, m.h
+		}
+		for _, it := range m.rows {
+			m.menu = &menu{pane: it.pane}
+			y, n := m.menuTop(), len(m.menuOpts())+3
+			if y < lo || y+n > hi {
+				t.Errorf("top=%v %s: menu at %d..%d, list area is %d..%d", top, it.name, y, y+n, lo, hi)
+			}
+			lines := strings.Split(m.View(), "\n")
+			for r, ln := range lines {
+				if got := lipgloss.Width(ln); got != m.w {
+					t.Errorf("top=%v %s: row %d is %d wide with the menu open, want %d", top, it.name, r, got, m.w)
+				}
+			}
+			if !strings.Contains(lines[y], "╭") {
+				t.Errorf("top=%v %s: no menu box at row %d", top, it.name, y)
+			}
+			for k := 0; k < n-3; k++ {
+				if got := m.menuHit(m.menuX()+2, y+1+k); got != k {
+					t.Errorf("top=%v %s: row %d hits option %d, want %d", top, it.name, y+1+k, got, k)
+				}
+			}
+			seen := false
+			for _, ln := range lines {
+				seen = seen || strings.Contains(ln, it.name)
+			}
+			if !seen {
+				t.Errorf("top=%v: the menu covers %s", top, it.name)
+			}
+			if m.menuHit(m.menuX()+2, y) != -1 {
+				t.Errorf("top=%v %s: the box's top edge counts as an option", top, it.name)
+			}
+		}
 	}
 }

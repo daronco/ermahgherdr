@@ -43,10 +43,12 @@ Green clears the moment you actually see the pane — you jump to it from the ba
 or you focus the terminal with tmux showing it. Reading it in the bar's preview
 (arrows) doesn't count; that's browsing, not reading.
 
-`u` (or a right-click on the item) puts the green back: you read it and want it
+`u`, a middle-click or **unread** in the right-click menu puts the green back (a middle-click on a green one reads it): you read it and want it
 to keep asking. That mark is pinned — unlike the automatic green it survives the
 pane being right there in front of you, and only a deliberate jump, or the
 session doing something new, clears it.
+
+A right-click opens a small menu on the session — floating over the list, which dims behind it — with **unread** (or **read**), **pause** and **prio**, each turning into the way back once set. The row under the mouse lights up, in the list and in the menu. The legend at the foot names the same three, key letter in bold. The two marks move a session rather than color it. A **paused** session folds to one dim line in a `‖ paused` block right by the counters, and a finished answer there stays quiet (no green, no sound) — a permission prompt still turns it purple; prompting it resumes it. A **prio** session gets a ★, a bold name and a `★ prio` block just above the paused one; its sounds play even with ♫ off. The unmarked sessions stay at the far end with no heading, first to scroll off when the bar overflows. One mark at a time. Marks are kept per Claude session in `$XDG_STATE_HOME/erma/flags.json`, so they outlive the pane and a tmux restart.
 
 A meter under the name shows how much of the room to auto-compact a session has spent. It draws on the session you are looking at and on any past 70%, turns amber there and purple from 85% — the same purple as waiting on you, told apart by form: waiting fills the row, the meter is a thin line under it. Compact rows show it as **◔N%** (N% spent), from 85%.
 
@@ -94,7 +96,7 @@ Make sure `~/.local/bin` is on your `PATH`, then wire the pieces you want.
 
 ### Claude Code hooks and status line
 
-erma reads the live state from a tmux pane option `@erma_wait` that a Claude Code hook keeps updated. The `statusLine` segment prints how much of the room to auto-compact is spent, colored past `ERMA_CTX_WARN` (default 85), and feeds the meter in the bar. In `~/.claude/settings.json`:
+erma reads the live state from a tmux pane option `@erma_wait` that a Claude Code hook keeps updated. The `statusLine` segment prints how much of the room to auto-compact is spent, colored past `ERMA_CTX_WARN` (default 85), and feeds the meter in the bar; ahead of it goes the session's mark (★ prio, ‖ paused). In `~/.claude/settings.json`:
 
 ```json
 {
@@ -146,9 +148,9 @@ a handful of tmux options and one state file. See
 
 ## Keys
 
-`↑/↓` (or `j/k`) move · `Enter` / click jump to the session · `r` reload · `q` quit.
+`↑/↓` (or `j/k`) move · `Enter` / click jump to the session · right-click menu · middle-click read/unread · `u` unread · `p` pause · `o` prio · `s` sound · `r` reload · `q` quit.
 
-`u` / right-click marks a session unread again. `alt+<n>` jumps straight to tmux
+`u` marks a session unread again. `alt+<n>` jumps straight to tmux
 window `<n>`. `s` toggles the sound, same as clicking the badge in the counter
 row.
 

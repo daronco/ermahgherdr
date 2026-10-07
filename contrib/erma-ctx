@@ -12,6 +12,9 @@
 # Usage, not headroom, on purpose: the bar and this segment have to count the
 # same direction, or reading one after the other means doing arithmetic.
 #
+# Ahead of it goes the mark you set on the session in erma — ★ prio, or
+# ‖ paused and for how long — so it shows from inside the session too.
+#
 # Usage in ~/.claude/settings.json (or from a wrapper that joins other segments):
 #   "statusLine": { "type": "command", "command": "/path/to/erma-ctx" }
 #
@@ -19,6 +22,26 @@
 set -euo pipefail
 
 warn="${ERMA_CTX_WARN:-85}"
+in="$(cat)"
+
+# The file, not the pane option: it is keyed by session, and holds outside tmux.
+flags="${XDG_STATE_HOME:-$HOME/.local/state}/erma/flags.json"
+mark=""
+if [[ -r "$flags" ]]; then
+  mark="$(jq -r --slurpfile f "$flags" --argjson now "$(date +%s)" '
+    ($f[0][.session_id // ""] // empty) as $r
+    | ($now - ($r.since // $now)) as $d
+    | if $r.flag == "prio" then "prio"
+      elif $r.flag == "paused" then "paused " +
+        (if $d < 3600 then "\($d / 60 | floor)m"
+         elif $d < 86400 then "\($d / 3600 | floor)h"
+         else "\($d / 86400 | floor)d" end)
+      else empty end' <<<"$in" 2>/dev/null || true)"
+fi
+case "$mark" in
+  prio)    printf '\033[1;97m★ prio\033[0m' ;;
+  paused*) printf '\033[38;5;244m‖ %s\033[0m' "$mark" ;;
+esac
 
 # Mirrors Claude Code 2.1.284: the window minus 20k kept for output, minus a 13k
 # buffer. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE can only move that point earlier.
@@ -31,11 +54,12 @@ left="$(jq -r --arg ovr "${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-}" '
          else $eff - 13000 end) as $thr
       | (($thr - $c.total_input_tokens) / $thr * 100 | round) as $l
       | if $l < 0 then 0 else $l end
-    end' 2>/dev/null || true)"
+    end' <<<"$in" 2>/dev/null || true)"
 
 used=""
 if [[ -n "$left" ]]; then
   used=$(( 100 - left ))
+  [[ -n "$mark" ]] && printf ' '
   if (( used >= warn )); then
     printf '\033[1;38;5;141mctx %s%% used\033[0m' "$used"
   else
