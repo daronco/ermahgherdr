@@ -384,6 +384,7 @@ type tmuxPoll struct {
 	screens map[string]screen
 	clients []int  // client pids, for the focus rule
 	current string // the pane the first attached client is showing
+	win     string // and its window, as session:index
 	sound   bool
 }
 
@@ -406,7 +407,7 @@ type tmuxPoll struct {
 func pollPanes(panes []string) tmuxPoll {
 	args := []string{
 		"display-message", "-p", capSep, ";",
-		"list-clients", "-F", "#{client_pid}\t#{pane_id}", ";",
+		"list-clients", "-F", "#{client_pid}\t#{pane_id}\t#{session_name}:#{window_index}", ";",
 		"display-message", "-p", capSep, ";",
 		"show", "-gv", "@erma_sound",
 	}
@@ -421,12 +422,12 @@ func pollPanes(panes []string) tmuxPoll {
 	}
 	for _, ln := range strings.Split(blocks[1], "\n") {
 		f := strings.Split(strings.TrimSpace(ln), "\t")
-		if len(f) != 2 || f[0] == "" {
+		if len(f) != 3 || f[0] == "" {
 			continue
 		}
 		poll.clients = append(poll.clients, atoi(f[0]))
 		if poll.current == "" {
-			poll.current = f[1]
+			poll.current, poll.win = f[1], f[2]
 		}
 	}
 	poll.sound = strings.TrimSpace(blocks[2]) == "on"
@@ -1193,7 +1194,7 @@ func (m *model) refresh() {
 	m.rows, poll = gather(m.permMiss)
 	arrange(m.rows, m.top)
 	m.focused, m.termFoc = detectFocus(m.sway, poll.clients)
-	m.current = poll.current
+	m.current = currentPane(m.rows, poll.current, poll.win)
 	m.sound = poll.sound
 	m.hidden = m.sway.isHidden()
 	// Looking at the pane is what clears the unread green: the terminal holds
@@ -1257,6 +1258,23 @@ func (m *model) refresh() {
 		}
 	}
 	m.recomputeDensity()
+}
+
+// currentPane: the session the terminal is showing. A shell split beside claude
+// can hold the active pane while the session is still right there on screen,
+// so a window with claude in it counts as showing that claude.
+func currentPane(rows []sess, pane, win string) string {
+	for _, r := range rows {
+		if r.pane == pane {
+			return pane
+		}
+	}
+	for _, r := range rows {
+		if r.sessWin == win {
+			return r.pane
+		}
+	}
+	return pane
 }
 
 // density switches by available geometry, with 1-item hysteresis.

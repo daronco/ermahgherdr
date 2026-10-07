@@ -557,3 +557,18 @@ func TestMenuPlacement(t *testing.T) {
 		}
 	}
 }
+
+// A shell split beside claude can hold the active pane; the session is still
+// the one on screen, so it keeps its arrow, its meter and the cursor.
+func TestCurrentPaneFollowsWindow(t *testing.T) {
+	rows := []sess{{pane: "%16", sessWin: "0:9"}, {pane: "%12", sessWin: "0:7"}}
+	for _, c := range []struct{ pane, win, want string }{
+		{"%16", "0:9", "%16"}, // claude itself is active
+		{"%41", "0:9", "%16"}, // a shell beside it is
+		{"%5", "0:3", "%5"},   // a window with no claude in it
+	} {
+		if got := currentPane(rows, c.pane, c.win); got != c.want {
+			t.Errorf("currentPane(%s, %s) = %s, want %s", c.pane, c.win, got, c.want)
+		}
+	}
+}
