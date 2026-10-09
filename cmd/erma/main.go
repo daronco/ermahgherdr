@@ -161,6 +161,7 @@ type sess struct {
 	since               int64
 	ctx                 string // @erma_ctx_used: % of the room to auto-compact already spent
 	sub                 int    // subagents running under it (@erma_sub)
+	dai                 bool   // the Dai session dai-live keeps (pane option @dai_live)
 	s, w, p             int
 }
 
@@ -223,7 +224,7 @@ type itemKey struct {
 	glyphCol                                lipgloss.Color
 	st                                      state
 	win, rowW, nameW                        int
-	sel, cur, comp, hov                     bool
+	sel, cur, comp, hov, dai                bool
 }
 
 // cacheCap: the age text ticks every second, so keys churn. Dropping the whole
@@ -242,7 +243,7 @@ func (m model) itemLines(it sess, idx int, th theme) string {
 		meta: metaLine(it), age: fmtAge(it.since), ctx: it.ctx, flag: it.flag, st: it.st,
 		win: it.w, rowW: m.rowW(), nameW: m.nameW(),
 		sel: idx == m.sel, cur: it.pane == m.current, comp: m.comp,
-		hov: it.pane == m.hover && idx != m.sel,
+		hov: it.pane == m.hover && idx != m.sel, dai: it.dai,
 	}
 	if s, ok := m.icache[k]; ok {
 		return s
@@ -640,9 +641,13 @@ func bandOf(fl string) int {
 }
 
 // arrange orders rows by band and keeps tmux order inside each. The far end is
-// the top of the screen bottom-up, and the bottom with --top.
+// the top of the screen bottom-up, and the bottom with --top. The Dai session
+// comes before every band: the first row is the top of the list in both layouts.
 func arrange(rows []sess, top bool) {
 	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].dai != rows[j].dai {
+			return rows[i].dai
+		}
 		a, b := bandOf(rows[i].flag), bandOf(rows[j].flag)
 		if top {
 			return a > b
@@ -674,14 +679,14 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@erma_wait}", "#{@erma_wait_since}", "#{pane_current_path}", "#{pane_title}",
-		"#{@ctx_label}", "#{@erma_ctx_used}", "#{@erma_sub}", "#{@erma_flag}",
+		"#{@ctx_label}", "#{@erma_ctx_used}", "#{@erma_sub}", "#{@erma_flag}", "#{@dai_live}",
 	}, "\t")
 	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
 	var recs [][]string
 	var panes []string
 	for _, line := range strings.Split(out, "\n") {
 		c := strings.Split(line, "\t")
-		if len(c) < 12 || c[0] == "" {
+		if len(c) < 13 || c[0] == "" {
 			continue
 		}
 		recs, panes = append(recs, c), append(panes, c[0])
@@ -726,7 +731,8 @@ func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 		rows = append(rows, sess{
 			pane: c[0], sessWin: c[1] + ":" + c[2], name: name, sid: sid, flag: fl,
 			mark: wait, st: st, since: since, ctx: strings.TrimSpace(c[9]), sub: len(strings.Fields(c[10])),
-			s: atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
+			dai: c[12] != "", // dai-live marks it with its data directory
+			s:   atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { // stable by loc — never reorders under the cursor
@@ -1570,12 +1576,21 @@ func (m model) nameW() int {
 	return 8
 }
 
-// nameLines: a priority row gives the ★ two cells of the name column.
-func (m model) nameLines(it sess) []string {
-	nw := m.nameW()
-	if it.flag == "prio" {
-		nw -= 2
+// markW: the name cells a row's mark takes — the Dai session's 🤖 (two-cell
+// emoji + space), or a priority row's ★ (+ space).
+func markW(it sess) int {
+	switch {
+	case it.dai:
+		return 3
+	case it.flag == "prio":
+		return 2
 	}
+	return 0
+}
+
+// nameLines: the name column, less what the row's mark takes.
+func (m model) nameLines(it sess) []string {
+	nw := m.nameW() - markW(it)
 	disp := midTruncate(strings.ToLower(it.name), nw*2)
 	return wrapN(disp, nw, 2)
 }
@@ -1594,6 +1609,29 @@ func (m model) itemHeight(it sess, comp bool) int {
 	return h
 }
 
+// pinned: bottom-up, the Dai session (arrange puts it first) is not part of the
+// list at all: it is drawn on the top rows of the panel, between two rules,
+// where the list growing from the bottom never reaches it.
+func (m model) pinned() bool {
+	return !m.top && len(m.rows) > 0 && m.rows[0].dai
+}
+
+// pinH: the rows the pinned block takes, its two rules included.
+func (m model) pinH() int {
+	if !m.pinned() {
+		return 0
+	}
+	return m.itemHeight(m.rows[0], m.comp) + 2
+}
+
+// listStart: the first row index drawn in the list proper.
+func (m model) listStart() int {
+	if m.pinned() {
+		return 1
+	}
+	return 0
+}
+
 // listTop: the screen row the first item is drawn on. Bottom-up, the list is
 // pinned above the footer chrome, so where it starts depends on how tall it is.
 func (m model) listTop() int {
@@ -1601,8 +1639,8 @@ func (m model) listTop() int {
 		return chromeRows
 	}
 	tall := 0
-	for i, it := range m.rows {
-		tall += m.leadN(i) + m.itemHeight(it, m.comp)
+	for i := m.listStart(); i < len(m.rows); i++ {
+		tall += m.leadN(i) + m.itemHeight(m.rows[i], m.comp)
 	}
 	return m.h - chromeRows - tall // negative when it overflows: rows scroll off the top
 }
@@ -1610,9 +1648,17 @@ func (m model) listTop() int {
 // lead: what is drawn above item i that belongs to no session — a blank where
 // one band ends and the next begins, and a heading over each marked band.
 func (m model) lead(i int) (gap, head bool) {
-	fl := m.rows[i].flag
-	gap = i > 0 && bandOf(m.rows[i-1].flag) != bandOf(fl)
-	head = fl != "" && (i == 0 || m.rows[i-1].flag != fl)
+	it := m.rows[i]
+	if it.dai { // its own band of one, headed by its 🤖
+		return false, false
+	}
+	first := i == m.listStart() // the pinned block has its own rule above the list
+	prev := sess{}
+	if i > 0 {
+		prev = m.rows[i-1]
+	}
+	gap = !first && (prev.dai || bandOf(prev.flag) != bandOf(it.flag))
+	head = it.flag != "" && (first || prev.dai || prev.flag != it.flag)
 	return gap, head
 }
 
@@ -1639,11 +1685,14 @@ func (m model) soundRow() int {
 }
 
 func (m model) hitTest(y int) int {
+	if m.pinned() && y >= 1 && y < 1+m.itemHeight(m.rows[0], m.comp) { // under the top rule
+		return 0
+	}
 	row := m.listTop()
-	for i, it := range m.rows {
+	for i := m.listStart(); i < len(m.rows); i++ {
 		row += m.leadN(i)
-		hh := m.itemHeight(it, m.comp)
-		if y >= row && y < row+hh {
+		hh := m.itemHeight(m.rows[i], m.comp)
+		if y >= row && y < row+hh && y >= m.pinH() { // under the pin it is not drawn
 			return i
 		}
 		row += hh // padding lives inside the item now; no separate gap
@@ -1653,8 +1702,11 @@ func (m model) hitTest(y int) int {
 
 // itemTop: the screen row item i's block starts on.
 func (m model) itemTop(i int) int {
+	if i == 0 && m.pinned() {
+		return 1 // under the top rule
+	}
 	row := m.listTop()
-	for j := 0; j < i; j++ {
+	for j := m.listStart(); j < i; j++ {
 		row += m.leadN(j) + m.itemHeight(m.rows[j], m.comp)
 	}
 	return row + m.leadN(i)
@@ -2005,9 +2057,11 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		band = c(cHoverBar, "▐", false)
 	}
 	gg, gc := m.glyphRune(it, th)
-	star, sw := "", 0 // a priority row's ★, and the name cells it takes
-	if it.flag == "prio" {
-		star, sw = c(th.white, "★", true)+c(rbg, " ", false), 2
+	star, sw := "", markW(it) // the row's mark, and the name cells it takes
+	if it.dai {
+		star = c(th.white, "🤖", false) + c(rbg, " ", false)
+	} else if it.flag == "prio" {
+		star = c(th.white, "★", true) + c(rbg, " ", false)
 	}
 
 	// 1 line: gutter + name + time(right) + arrow. A paused row is always this
@@ -2312,11 +2366,15 @@ func (m model) View() string {
 	th := themeFor(m.focused)
 	head, rule := m.header()
 
-	var list []string
+	var pin, list []string
+	if m.pinned() {
+		pin = append(append([]string{rule}, strings.Split(m.itemLines(m.rows[0], 0, th), "\n")...), rule)
+	}
 	if len(m.rows) == 0 {
 		list = []string{" " + fg(th.meta, "no claude"), " " + fg(th.meta, "sessions")}
 	} else {
-		for idx, it := range m.rows {
+		for idx := m.listStart(); idx < len(m.rows); idx++ {
+			it := m.rows[idx]
 			gap, head := m.lead(idx)
 			if gap {
 				list = append(list, "")
@@ -2339,7 +2397,7 @@ func (m model) View() string {
 	// glitch, not as a mascot. It needs its padding and a row of gap to earn
 	// its place.
 	var mascot []string
-	if art := m.mascotArt(m.rowW(), m.focused); len(list)+len(foot)+len(art)+mascotPad < m.h {
+	if art := m.mascotArt(m.rowW(), m.focused); len(pin)+len(list)+len(foot)+len(art)+mascotPad < m.h {
 		pad := make([]string, mascotPad)
 		if m.top {
 			mascot = append(art, pad...)
@@ -2353,7 +2411,7 @@ func (m model) View() string {
 		lead = append(reversed(foot), list...)
 		trail = mascot
 	} else {
-		lead = mascot
+		lead = append(pin, mascot...)
 		trail = append(list, foot...)
 	}
 	gap := m.h - len(lead) - len(trail)
@@ -2367,8 +2425,10 @@ func (m model) View() string {
 	if over := len(rows) - m.h; over > 0 {
 		if m.top {
 			rows = rows[:m.h]
-		} else {
-			rows = rows[over:]
+		} else if keep := m.h - len(pin); keep > 0 { // the list slides under the pin, never over it
+			rows = append(append([]string(nil), pin...), rows[len(rows)-keep:]...)
+		} else { // shorter than the pin itself (the first frame has h 0)
+			rows = pin[:max(m.h, 0)]
 		}
 	}
 	if m.menu != nil {

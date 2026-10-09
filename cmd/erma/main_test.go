@@ -191,6 +191,7 @@ func TestRowsFitWidth(t *testing.T) {
 		{pane: "%4", name: "portal/2747-ident", st: proc, w: 4, since: 1, flag: "prio"},
 		{pane: "%6", name: "hovered", st: done, w: 7, since: 1},
 		{pane: "%5", name: "abel/lgpd-export", st: urgent, w: 5, since: 1, flag: "paused"},
+		{pane: "%7", name: "dai/live", st: done, w: 1, since: 1, ctx: "40", dai: true},
 	}
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
@@ -455,6 +456,14 @@ func TestArrange(t *testing.T) {
 	if got := names(rows); got != "c f a e b d" {
 		t.Errorf("top-down: %q", got)
 	}
+	// The Dai session leads in both layouts, whatever its mark.
+	for _, top := range []bool{false, true} {
+		rows = append(mk(), sess{name: "dai", dai: true, flag: "prio"})
+		arrange(rows, top)
+		if rows[0].name != "dai" {
+			t.Errorf("top=%v: Dai session not first: %q", top, names(rows))
+		}
+	}
 }
 
 // The band headings and gaps are rows that belong to no session; a click on a
@@ -466,6 +475,7 @@ func TestHitTestMatchesBands(t *testing.T) {
 		{pane: "%3", name: "gammamark", st: proc, w: 3, flag: "prio"},
 		{pane: "%4", name: "deltamark", st: urgent, w: 4, flag: "paused"},
 		{pane: "%5", name: "epsilonmark", st: idle, w: 5},
+		{pane: "%6", name: "daimark", st: done, w: 6, dai: true},
 	}
 	for _, top := range []bool{false, true} {
 		for _, h := range []int{60, 24} {
@@ -569,6 +579,24 @@ func TestCurrentPaneFollowsWindow(t *testing.T) {
 	} {
 		if got := currentPane(rows, c.pane, c.win); got != c.want {
 			t.Errorf("currentPane(%s, %s) = %s, want %s", c.pane, c.win, got, c.want)
+		}
+	}
+}
+
+// The first frame is drawn before the window size arrives (h 0), and a short
+// bar can be smaller than the pinned Dai block: neither may panic.
+func TestPinnedViewAnyHeight(t *testing.T) {
+	rows := []sess{
+		{pane: "%1", name: "a", st: idle, w: 1},
+		{pane: "%2", name: "b", st: done, w: 2, flag: "prio"},
+		{pane: "%9", name: "dai/live", st: urgent, w: 9, dai: true},
+	}
+	arrange(rows, false)
+	for _, h := range []int{0, 1, 2, 3, 5, 8, 40} {
+		m := model{w: 28, h: h, rows: rows}
+		m.recomputeDensity()
+		if got := len(strings.Split(m.View(), "\n")); h > 0 && got > h+2 {
+			t.Errorf("h=%d: view has %d lines", h, got)
 		}
 	}
 }
