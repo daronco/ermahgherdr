@@ -52,6 +52,8 @@ A right-click opens a small menu on the session — floating over the list, whic
 
 A pane carrying the tmux option `@dai_live` — the always-on assistant session of dai-live marks itself so — is pinned: bottom-up it leaves the list and sits on the top rows of the panel between two rules, a 🤖 before its name, and the list slides under it when the bar overflows. With `--top` it is just the first row.
 
+Any pane can carry its own sounds in the tmux options `@erma_sound_perm` and `@erma_sound_done`: a file to play instead of the default, or `off`. A sound the pane chose plays even with ♫ off — dai-live uses it to stay silent when a round ends and call out only when it asks something.
+
 A meter under the name shows how much of the room to auto-compact a session has spent. It draws on the session you are looking at and on any past 70%, turns amber there and purple from 85% — the same purple as waiting on you, told apart by form: waiting fills the row, the meter is a thin line under it. Compact rows show it as **◔N%** (N% spent), from 85%.
 
 **⤷N** on the time line means that session has N subagents running.

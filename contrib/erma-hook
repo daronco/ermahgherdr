@@ -109,15 +109,25 @@ tmux refresh-client -S 2>/dev/null || true
 # Both gated by the tmux global @erma_sound, toggled from the erma UI
 # (the ♫ chip) — except on a priority session, which is heard regardless.
 # Override the files with ERMA_SOUND_PERM / ERMA_SOUND_DONE.
+# A pane can carry its own: @erma_sound_perm / @erma_sound_done, a file or
+# "off". A sound the pane chose is heard regardless too: whoever set it wants
+# that session heard (an always-on assistant that should only speak up when it
+# asks something sets done to off and perm to its own sound).
 flag="$(tmux show -p -t "$p" -v @erma_flag 2>/dev/null || true)"
+own="$(tmux show -p -t "$p" -v "@erma_sound_$new" 2>/dev/null || true)"
 snd=""
 case "$new" in
   perm) snd="${ERMA_SOUND_PERM:-/usr/share/sounds/freedesktop/stereo/complete.oga}" ;;
   done) [[ "$flag" == "paused" ]] || snd="${ERMA_SOUND_DONE:-/usr/share/sounds/freedesktop/stereo/bell.oga}" ;;
 esac
+if [[ "$own" == "off" ]]; then
+  snd=""
+elif [[ -n "$own" && -n "$snd" ]]; then
+  snd="$own"
+fi
 if [[ -n "$snd" ]]; then
   gate="$(tmux show -gv @erma_sound 2>/dev/null || true)"
-  if [[ ( "$gate" == "on" || "$flag" == "prio" ) && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then
+  if [[ ( "$gate" == "on" || "$flag" == "prio" || -n "$own" ) && -r "$snd" ]] && command -v paplay >/dev/null 2>&1; then
     paplay "$snd" >/dev/null 2>&1 &
   fi
 fi
