@@ -600,3 +600,55 @@ func TestPinnedViewAnyHeight(t *testing.T) {
 		}
 	}
 }
+
+// With a Dai session up, the mascot is lit while its pane is in front of you;
+// without one, the bar's own focus lights it, as before.
+func TestMascotLit(t *testing.T) {
+	dai := []sess{{pane: "%1", name: "a"}, {pane: "%9", name: "dai/live", dai: true}}
+	for _, c := range []struct {
+		rows             []sess
+		termFoc, focused bool
+		current          string
+		want             bool
+	}{
+		{dai, true, false, "%9", true},
+		{dai, true, true, "%1", false},
+		{dai, false, true, "%9", false},
+		{nil, false, true, "", true},
+		{nil, true, false, "%1", false},
+	} {
+		m := model{rows: c.rows, termFoc: c.termFoc, focused: c.focused, current: c.current}
+		if got := m.mascotLit(); got != c.want {
+			t.Errorf("%+v: got %v, want %v", c, got, c.want)
+		}
+	}
+}
+
+// A click on a badge lands on the badge drawn there, in both sizes of mascot.
+func TestBadgeAtMatchesRender(t *testing.T) {
+	rows := []sess{{pane: "%1", name: "a", st: idle, w: 1}, {pane: "%9", name: "dai/live", st: done, w: 9, dai: true}}
+	arrange(rows, false)
+	for _, w := range []int{28, 36, 45} {
+		m := model{w: w, h: 60, rows: rows, live: "armed", watch: "recording"}
+		m.recomputeDensity()
+		g := m.topGeo()
+		if m.mascotH() == 0 || g.bx < 0 {
+			t.Fatalf("w=%d: no badges drawn", w)
+		}
+		lines := strings.Split(m.View(), "\n")
+		for _, b := range []struct {
+			name string
+			y    int
+		}{{"live", mascotPad + g.liveY}, {"watch", mascotPad + g.watchY}} {
+			if got := m.badgeAt(g.bx+1, b.y); got != b.name {
+				t.Errorf("w=%d: click on %s at row %d says %q", w, b.name, b.y, got)
+			}
+			if !strings.Contains(lines[b.y], map[string]string{"live": badgeLive, "watch": badgeWatch}[b.name]) {
+				t.Errorf("w=%d: no %s badge on row %d: %q", w, b.name, b.y, lines[b.y])
+			}
+		}
+		if got := m.badgeAt(0, mascotPad+g.liveY); got != "" {
+			t.Errorf("w=%d: a click left of the badges hit %q", w, got)
+		}
+	}
+}

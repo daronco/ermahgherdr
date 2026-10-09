@@ -134,6 +134,19 @@ var invaderUp = []string{
 	"..X.....X..",
 }
 
+// The assistants' badges beside the mascot: the same Font Awesome icons as their
+// waybar modules (satellite-dish, briefcase), tinted by the same states.
+// dai-live listening sits by the ear, workwatch by the feet. The terminal needs
+// Font Awesome 7 among its fonts (foot: a fallback in its font list), or it
+// draws a box.
+const (
+	badgeLive  = "\uf7c0"
+	badgeWatch = "\uf0b1"
+	// A button: a space, the icon, two spaces. The icon is ~1.7 cells wide and
+	// overflows into the cell after it, so the second space is what centres it.
+	badgeW = 4
+)
+
 type state int
 
 const (
@@ -180,11 +193,14 @@ type model struct {
 	top      bool           // lay out top-down (the --top flag) instead of bottom-up
 	comp     bool           // compact (geometry-based, with 1-item hysteresis)
 	sound    bool           // audible alerts on (mirrors tmux global @erma_sound)
+	live     string         // dai-live's state (off, armed, capturing, nosignal, error, stopped)
+	watch    string         // workwatch: "recording", "paused", or "" when it is not installed
 	sway     *swayWatch     // the compositor feed: who has focus, are we on screen
 	hidden   bool           // the bar's window is on a workspace nobody is showing
 	anim     bool           // the animation tick is running (see moving)
 	menu     *menu          // the right-click menu, when one is open
 	hover    string         // the pane of the row under the mouse, "" when none
+	hoverB   string         // the badge under the mouse ("live", "watch"), "" when none
 	hoverAt  time.Time      // the last mouse motion, to retire a hover left behind
 	icache   map[itemKey]string
 	pcache   map[string]string
@@ -387,6 +403,7 @@ type tmuxPoll struct {
 	current string // the pane the first attached client is showing
 	win     string // and its window, as session:index
 	sound   bool
+	live    string // @dai_live_state, set by dai-live; "" without it
 }
 
 // pollPanes reads every pane in ONE tmux round-trip: a `display-message` marks
@@ -410,7 +427,10 @@ func pollPanes(panes []string) tmuxPoll {
 		"display-message", "-p", capSep, ";",
 		"list-clients", "-F", "#{client_pid}\t#{pane_id}\t#{session_name}:#{window_index}", ";",
 		"display-message", "-p", capSep, ";",
-		"show", "-gv", "@erma_sound",
+		"show", "-gv", "@erma_sound", ";",
+		"display-message", "-p", capSep, ";",
+		// -q: unset without dai-live, and an error would end the list here.
+		"show", "-gqv", "@dai_live_state",
 	}
 	for _, p := range panes {
 		args = append(args, ";", "display-message", "-p", "-t", p, capSep,
@@ -418,7 +438,7 @@ func pollPanes(panes []string) tmuxPoll {
 	}
 	blocks := strings.Split(tmuxOut(args...), capSep+"\n")
 	var poll tmuxPoll
-	if len(blocks) < 3 {
+	if len(blocks) < 4 {
 		return poll // tmux gave us nothing usable
 	}
 	for _, ln := range strings.Split(blocks[1], "\n") {
@@ -432,11 +452,12 @@ func pollPanes(panes []string) tmuxPoll {
 		}
 	}
 	poll.sound = strings.TrimSpace(blocks[2]) == "on"
-	if len(blocks) > len(panes)+3 {
+	poll.live = strings.TrimSpace(blocks[3])
+	if len(blocks) > len(panes)+4 {
 		return poll // a pane is showing our marker: bail rather than misalign
 	}
 	poll.screens = map[string]screen{}
-	for i, blk := range blocks[3:] {
+	for i, blk := range blocks[4:] {
 		if i < len(panes) && strings.TrimSpace(blk) != "" {
 			if sc := readScreen(blk); !sc.viewer {
 				poll.screens[panes[i]] = sc
@@ -1202,6 +1223,8 @@ func (m *model) refresh() {
 	m.focused, m.termFoc = detectFocus(m.sway, poll.clients)
 	m.current = currentPane(m.rows, poll.current, poll.win)
 	m.sound = poll.sound
+	m.live = poll.live
+	m.watch = watchState()
 	m.hidden = m.sway.isHidden()
 	// Looking at the pane is what clears the unread green: the terminal holds
 	// the keyboard and tmux is showing that pane, so the answer is on screen.
@@ -1238,8 +1261,8 @@ func (m *model) refresh() {
 	if m.sel >= len(m.rows) {
 		m.sel = max(0, len(m.rows)-1)
 	}
-	if m.hover != "" && time.Since(m.hoverAt) > hoverTTL {
-		m.hover = ""
+	if (m.hover != "" || m.hoverB != "") && time.Since(m.hoverAt) > hoverTTL {
+		m.hover, m.hoverB = "", ""
 	}
 	// An open menu holds the cursor on its session. It closes if that session is
 	// gone, or once the bar loses the keyboard — you clicked somewhere else.
@@ -1340,6 +1363,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.menu.at = m.menuHit(msg.X, msg.Y)
 				return m, nil
 			}
+			m.hoverB = m.badgeAt(msg.X, msg.Y)
 			// Passing the right edge is the pointer on its way out of the bar.
 			m.hover = ""
 			if idx := m.hitTest(msg.Y); idx >= 0 && msg.X < m.rowW()-1 {
@@ -1362,7 +1386,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.Button {
 		case tea.MouseButtonLeft:
-			if msg.Y == m.soundRow() && msg.X >= m.rowW()-5 {
+			if b := m.badgeAt(msg.X, msg.Y); b != "" {
+				toggleBadge(b)
+				m.refresh()
+			} else if msg.Y == m.soundRow() && msg.X >= m.rowW()-5 {
 				m.toggleSound() // sound badge lives at the counter row's right edge
 			} else if idx := m.hitTest(msg.Y); idx >= 0 {
 				m.sel = idx
@@ -1576,13 +1603,10 @@ func (m model) nameW() int {
 	return 8
 }
 
-// markW: the name cells a row's mark takes — the Dai session's 🤖 (two-cell
-// emoji + space), or a priority row's ★ (+ space).
+// markW: the name cells a priority row's ★ takes, with its space. The Dai's
+// icon needs none: it is drawn where the status bullet goes.
 func markW(it sess) int {
-	switch {
-	case it.dai:
-		return 3
-	case it.flag == "prio":
+	if it.flag == "prio" && !it.dai {
 		return 2
 	}
 	return 0
@@ -1614,6 +1638,137 @@ func (m model) itemHeight(it sess, comp bool) int {
 // where the list growing from the bottom never reaches it.
 func (m model) pinned() bool {
 	return !m.top && len(m.rows) > 0 && m.rows[0].dai
+}
+
+// mascotLit: with a Dai session up, the mascot is the Dai -- lit while its pane
+// is the one in front of you. Without one, the bar's own focus lights it.
+func (m model) mascotLit() bool {
+	for _, r := range m.rows {
+		if r.dai {
+			return m.termFoc && m.current == r.pane
+		}
+	}
+	return m.focused
+}
+
+// watchState reads workwatch's pause switch: one stat, no fork.
+func watchState() string {
+	home, _ := os.UserHomeDir()
+	if _, err := os.Stat(filepath.Join(home, ".local", "share", "workwatch")); err != nil {
+		return ""
+	}
+	run := os.Getenv("XDG_RUNTIME_DIR")
+	if run == "" {
+		run = "/tmp"
+	}
+	if _, err := os.Stat(filepath.Join(run, "workwatch-paused")); err == nil {
+		return "paused"
+	}
+	return "recording"
+}
+
+// topGeo: where the mascot and its badges sit, in cells of the art block. With
+// badges the mascot moves left to make room; it drops to half size when the
+// full one and the badges do not fit side by side.
+type topGeo struct {
+	pw, x, rows   int // mascot pixel width, its column, its lines
+	bx            int // the badges' column, -1 without badges
+	liveY, watchY int // each badge's first line, -1 when absent
+}
+
+func (m model) topGeo() topGeo {
+	rw := m.rowW()
+	g := topGeo{bx: -1, liveY: -1, watchY: -1}
+	g.pw = min(2, max(1, (rw*6+55)/110)) // ~60% width / 11 px, rounded
+	badges := m.live != "" || m.watch != ""
+	if badges && g.pw == 2 && rw < 22+1+badgeW {
+		g.pw = 1
+	}
+	g.rows = 4
+	if g.pw == 2 {
+		g.rows = 8
+	}
+	if !badges {
+		g.x = max(0, (rw-11*g.pw)/2)
+		return g
+	}
+	g.x = max(0, (rw-(11*g.pw+1+badgeW))/2) // mascot and badges centred as one block
+	g.bx = g.x + 11*g.pw + 1
+	first, second := 0, g.rows-1 // by the ear, and level with the feet
+	if g.pw == 2 {
+		first = 1
+	}
+	if m.live != "" {
+		g.liveY = first
+	}
+	if m.watch != "" {
+		g.watchY = second
+	}
+	return g
+}
+
+// badgeAt: which badge a click at (x, y) landed on, or "".
+func (m model) badgeAt(x, y int) string {
+	g := m.topGeo()
+	if g.bx < 0 || m.mascotH() == 0 || x < g.bx || x >= g.bx+badgeW {
+		return ""
+	}
+	y0 := mascotPad // bottom-up: the padding, then the art
+	if m.top {
+		y0 = m.h - mascotPad - g.rows
+	}
+	switch {
+	case g.liveY >= 0 && y == y0+g.liveY:
+		return "live"
+	case g.watchY >= 0 && y == y0+g.watchY:
+		return "watch"
+	}
+	return ""
+}
+
+// toggleBadge flips what the badge stands for, through the tool's own switch.
+func toggleBadge(which string) {
+	tool := map[string]string{"live": "dai-live", "watch": "workwatch"}[which]
+	path, err := exec.LookPath(tool)
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, ".dotfiles", "bin", tool)
+	}
+	run(path, "toggle")
+}
+
+// mascotH: the rows the mascot takes on top -- its padding, the art and, over a
+// pinned Dai block, a row of gap -- or 0 when the panel has no room for it. The
+// mascot yields whole: a cropped one reads as a glitch, not as a mascot.
+func (m model) mascotH() int {
+	art := m.topGeo().rows
+	list := 2 // "no claude sessions"
+	if len(m.rows) > 0 {
+		list = 0
+		for i := m.listStart(); i < len(m.rows); i++ {
+			list += m.leadN(i) + m.itemHeight(m.rows[i], m.comp)
+		}
+	}
+	foot := 4
+	if len(m.rows) > 0 {
+		foot = 6
+	}
+	gap := 0
+	if m.pinned() {
+		gap = 1
+	}
+	if m.pinH()+list+foot+art+mascotPad+gap >= m.h {
+		return 0
+	}
+	return mascotPad + art + gap
+}
+
+// pinTop: the screen row the pinned block starts on, under the mascot.
+func (m model) pinTop() int {
+	if m.top {
+		return 0
+	}
+	return m.mascotH()
 }
 
 // pinH: the rows the pinned block takes, its two rules included.
@@ -1649,7 +1804,7 @@ func (m model) listTop() int {
 // one band ends and the next begins, and a heading over each marked band.
 func (m model) lead(i int) (gap, head bool) {
 	it := m.rows[i]
-	if it.dai { // its own band of one, headed by its 🤖
+	if it.dai { // its own band of one, under its own rules
 		return false, false
 	}
 	first := i == m.listStart() // the pinned block has its own rule above the list
@@ -1685,14 +1840,14 @@ func (m model) soundRow() int {
 }
 
 func (m model) hitTest(y int) int {
-	if m.pinned() && y >= 1 && y < 1+m.itemHeight(m.rows[0], m.comp) { // under the top rule
-		return 0
+	if top := m.pinTop() + 1; m.pinned() && y >= top && y < top+m.itemHeight(m.rows[0], m.comp) {
+		return 0 // under the pin's top rule
 	}
 	row := m.listTop()
 	for i := m.listStart(); i < len(m.rows); i++ {
 		row += m.leadN(i)
 		hh := m.itemHeight(m.rows[i], m.comp)
-		if y >= row && y < row+hh && y >= m.pinH() { // under the pin it is not drawn
+		if y >= row && y < row+hh && y >= m.pinTop()+m.pinH() { // under the pin it is not drawn
 			return i
 		}
 		row += hh // padding lives inside the item now; no separate gap
@@ -1703,7 +1858,7 @@ func (m model) hitTest(y int) int {
 // itemTop: the screen row item i's block starts on.
 func (m model) itemTop(i int) int {
 	if i == 0 && m.pinned() {
-		return 1 // under the top rule
+		return m.pinTop() + 1 // under the pin's top rule
 	}
 	row := m.listTop()
 	for j := m.listStart(); j < i; j++ {
@@ -1845,6 +2000,14 @@ func (m model) spineRune(st state) (string, lipgloss.Color) {
 	}
 }
 func (m model) glyphRune(it sess, th theme) (string, lipgloss.Color) {
+	g, c := m.stateGlyph(it, th)
+	if it.dai { // the Dai's own icon stands in for the bullet, in the state's colour
+		return badgeLive, c
+	}
+	return g, c
+}
+
+func (m model) stateGlyph(it sess, th theme) (string, lipgloss.Color) {
 	switch it.st {
 	case urgent:
 		g := "●"
@@ -2057,10 +2220,8 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		band = c(cHoverBar, "▐", false)
 	}
 	gg, gc := m.glyphRune(it, th)
-	star, sw := "", markW(it) // the row's mark, and the name cells it takes
-	if it.dai {
-		star = c(th.white, "🤖", false) + c(rbg, " ", false)
-	} else if it.flag == "prio" {
+	star, sw := "", markW(it) // a priority row's ★, and the name cells it takes
+	if sw > 0 {
 		star = c(th.white, "★", true) + c(rbg, " ", false)
 	}
 
@@ -2393,16 +2554,19 @@ func (m model) View() string {
 	if len(m.rows) > 0 {
 		foot = []string{"", m.rule(), m.legend(), rule, head, ""}
 	}
-	// The mascot is decoration and yields whole — a cropped one reads as a
-	// glitch, not as a mascot. It needs its padding and a row of gap to earn
-	// its place.
+	// The mascot is decoration and yields whole (see mascotH). Bottom-up it is
+	// the topmost thing, the pinned Dai block right under it.
 	var mascot []string
-	if art := m.mascotArt(m.rowW(), m.focused); len(pin)+len(list)+len(foot)+len(art)+mascotPad < m.h {
+	if m.mascotH() > 0 {
+		art := m.topArt()
 		pad := make([]string, mascotPad)
 		if m.top {
 			mascot = append(art, pad...)
 		} else {
 			mascot = append(pad, art...)
+			if m.pinned() {
+				mascot = append(mascot, "")
+			}
 		}
 	}
 
@@ -2411,7 +2575,7 @@ func (m model) View() string {
 		lead = append(reversed(foot), list...)
 		trail = mascot
 	} else {
-		lead = append(pin, mascot...)
+		lead = append(mascot, pin...)
 		trail = append(list, foot...)
 	}
 	gap := m.h - len(lead) - len(trail)
@@ -2450,34 +2614,11 @@ func reversed(ss []string) []string {
 	return out
 }
 
-// mascotArt: the 👾 bitmap scaled to ~60% width, centered, in a very faded
-// purple — barely there unfocused, a touch more present focused.
-func (m model) mascotArt(rw int, focused bool) []string {
-	const maxPW = 2         // cap: current size is the max; only shrinks below it
-	pw := (rw*6 + 55) / 110 // ~60% width / 11 px, rounded
-	if pw > maxPW {
-		pw = maxPW
-	}
-	if pw < 1 {
-		pw = 1
-	}
-	col := lipgloss.Color("#262430") // unfocused: barely above the panel
-	if focused {
-		col = lipgloss.Color("#38334f") // focused: a bit more, still dim
-	}
-	artW := 11 * pw
-	pad := (rw - artW) / 2
-	if pad < 0 {
-		pad = 0
-	}
-	bmp := invaderDown
-	if focused {
-		bmp = invaderUp // hands up when the bar is focused
-	}
-	lead := strings.Repeat(" ", pad)
+// pixels renders a bitmap: one █ per pixel, pw cells wide, at pw 2; at pw 1,
+// half-blocks pack two bitmap rows into a line, keeping the proportion.
+func pixels(bmp []string, pw int) []string {
 	var out []string
 	if pw >= 2 {
-		// full size: one █ block per pixel, one row per bitmap row (8 rows)
 		for _, row := range bmp {
 			var sb strings.Builder
 			for _, ch := range row {
@@ -2487,12 +2628,10 @@ func (m model) mascotArt(rw int, focused bool) []string {
 					sb.WriteString(strings.Repeat(" ", pw))
 				}
 			}
-			out = append(out, lead+fg(col, sb.String()))
+			out = append(out, sb.String())
 		}
 		return out
 	}
-	// shrunk: half-blocks pack 2 bitmap rows per line -> height halves too,
-	// so it scales down keeping the same proportion (not stretched).
 	for i := 0; i+1 < len(bmp); i += 2 {
 		top, bot := bmp[i], bmp[i+1]
 		var sb strings.Builder
@@ -2509,7 +2648,57 @@ func (m model) mascotArt(rw int, focused bool) []string {
 				sb.WriteString(" ")
 			}
 		}
-		out = append(out, lead+fg(col, sb.String()))
+		out = append(out, sb.String())
+	}
+	return out
+}
+
+// badgeColor: the same colours as the waybar modules of dai-live and workwatch.
+func badgeColor(state string) lipgloss.Color {
+	switch state {
+	case "capturing", "recording":
+		return lipgloss.Color("#4fd08a")
+	case "armed":
+		return lipgloss.Color("#e8a33d")
+	case "nosignal", "error", "stopped":
+		return lipgloss.Color("#e05b57")
+	}
+	return lipgloss.Color("#7a7a7a")
+}
+
+// badgeCell: a badge as a three-cell button, shaded like a row under the pointer.
+func (m model) badgeCell(which, icon string, col lipgloss.Color) string {
+	st := lipgloss.NewStyle().Foreground(col)
+	if m.hoverB == which {
+		st = st.Background(cHoverBar)
+	}
+	return st.Render(" " + icon + "  ")
+}
+
+// topArt: the 👾 in a very faded purple -- barely there, a touch more present
+// (and arms up) while lit -- with the assistants' badges beside it.
+func (m model) topArt() []string {
+	g := m.topGeo()
+	lit := m.mascotLit()
+	col := lipgloss.Color("#262430")
+	bmp := invaderDown
+	if lit {
+		col, bmp = lipgloss.Color("#38334f"), invaderUp
+	}
+	art := pixels(bmp, g.pw)
+	out := make([]string, len(art))
+	for i, row := range art {
+		line := strings.Repeat(" ", g.x) + fg(col, row)
+		if g.bx >= 0 {
+			line += " "
+			switch i {
+			case g.liveY:
+				line += m.badgeCell("live", badgeLive, badgeColor(m.live))
+			case g.watchY:
+				line += m.badgeCell("watch", badgeWatch, badgeColor(m.watch))
+			}
+		}
+		out[i] = line
 	}
 	return out
 }
