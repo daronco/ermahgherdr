@@ -652,3 +652,25 @@ func TestBadgeAtMatchesRender(t *testing.T) {
 		}
 	}
 }
+
+// At full size the badges share the arm's column but never cover a pixel of the
+// mascot, arms down or up.
+func TestBadgesClearMascot(t *testing.T) {
+	m := model{w: 45, h: 60, live: "armed", watch: "recording"}
+	m.recomputeDensity()
+	g := m.topGeo()
+	if g.pw != 2 {
+		t.Fatalf("pw=%d, want the full-size mascot", g.pw)
+	}
+	for _, bmp := range [][]string{invaderDown, invaderUp} {
+		art := pixels(bmp, g.pw)
+		for _, y := range []int{g.liveY, g.watchY} {
+			r := []rune(art[y])
+			for c := g.bx - g.x; c < min(len(r), g.bx-g.x+badgeW); c++ {
+				if r[c] != ' ' {
+					t.Errorf("badge on line %d covers the mascot at column %d: %q", y, c, art[y])
+				}
+			}
+		}
+	}
+}

@@ -136,7 +136,7 @@ var invaderUp = []string{
 
 // The assistants' badges beside the mascot: the same Font Awesome icons as their
 // waybar modules (satellite-dish, briefcase), tinted by the same states.
-// dai-live listening sits by the ear, workwatch by the feet. The terminal needs
+// dai-live listening sits by the antennae, workwatch by the feet. The terminal needs
 // Font Awesome 7 among its fonts (foot: a fallback in its font list), or it
 // draws a box.
 const (
@@ -1669,11 +1669,22 @@ func watchState() string {
 
 // topGeo: where the mascot and its badges sit, in cells of the art block. With
 // badges the mascot moves left to make room; it drops to half size when the
-// full one and the badges do not fit side by side.
+// full one and the badges do not fit.
 type topGeo struct {
 	pw, x, rows   int // mascot pixel width, its column, its lines
 	bx            int // the badges' column, -1 without badges
 	liveY, watchY int // each badge's first line, -1 when absent
+}
+
+// badgeOff: where the badges start, from the mascot's column. At full size the
+// icon sits on the arm's column, on the top and bottom lines -- the only ones
+// the arm never reaches, up or down. At half size a line packs two bitmap rows
+// and the badge would clip the arm, so it goes beside the mascot.
+func badgeOff(pw int) int {
+	if pw == 2 {
+		return 10*pw - 1
+	}
+	return 11*pw + 1
 }
 
 func (m model) topGeo() topGeo {
@@ -1681,7 +1692,7 @@ func (m model) topGeo() topGeo {
 	g := topGeo{bx: -1, liveY: -1, watchY: -1}
 	g.pw = min(2, max(1, (rw*6+55)/110)) // ~60% width / 11 px, rounded
 	badges := m.live != "" || m.watch != ""
-	if badges && g.pw == 2 && rw < 22+1+badgeW {
+	if badges && g.pw == 2 && rw < badgeOff(2)+badgeW {
 		g.pw = 1
 	}
 	g.rows = 4
@@ -1692,12 +1703,9 @@ func (m model) topGeo() topGeo {
 		g.x = max(0, (rw-11*g.pw)/2)
 		return g
 	}
-	g.x = max(0, (rw-(11*g.pw+1+badgeW))/2) // mascot and badges centred as one block
-	g.bx = g.x + 11*g.pw + 1
-	first, second := 0, g.rows-1 // by the ear, and level with the feet
-	if g.pw == 2 {
-		first = 1
-	}
+	g.x = max(0, (rw-(badgeOff(g.pw)+badgeW))/2) // mascot and badges centred as one block
+	g.bx = g.x + badgeOff(g.pw)
+	first, second := 0, g.rows-1 // by the antennae, and level with the feet
 	if m.live != "" {
 		g.liveY = first
 	}
@@ -2676,7 +2684,7 @@ func (m model) badgeCell(which, icon string, col lipgloss.Color) string {
 }
 
 // topArt: the 👾 in a very faded purple -- barely there, a touch more present
-// (and arms up) while lit -- with the assistants' badges beside it.
+// (and arms up) while lit -- with the assistants' badges at its arm.
 func (m model) topArt() []string {
 	g := m.topGeo()
 	lit := m.mascotLit()
@@ -2688,17 +2696,19 @@ func (m model) topArt() []string {
 	art := pixels(bmp, g.pw)
 	out := make([]string, len(art))
 	for i, row := range art {
-		line := strings.Repeat(" ", g.x) + fg(col, row)
-		if g.bx >= 0 {
-			line += " "
-			switch i {
-			case g.liveY:
-				line += m.badgeCell("live", badgeLive, badgeColor(m.live))
-			case g.watchY:
-				line += m.badgeCell("watch", badgeWatch, badgeColor(m.watch))
-			}
+		var badge string
+		switch {
+		case g.bx < 0:
+		case i == g.liveY:
+			badge = m.badgeCell("live", badgeLive, badgeColor(m.live))
+		case i == g.watchY:
+			badge = m.badgeCell("watch", badgeWatch, badgeColor(m.watch))
 		}
-		out[i] = line
+		if badge != "" { // the badge covers the mascot from its column on
+			r, n := []rune(row), g.bx-g.x
+			row = string(r[:min(len(r), n)]) + strings.Repeat(" ", max(0, n-len(r)))
+		}
+		out[i] = strings.Repeat(" ", g.x) + fg(col, row) + badge
 	}
 	return out
 }
