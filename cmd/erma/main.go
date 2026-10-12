@@ -74,7 +74,7 @@ func statusOf(wait string, sc screen, seen bool) state { return session.StatusOf
 func permAlive(sc screen, seen bool, age int64, misses int) bool {
 	return session.PermAlive(sc, seen, age, misses)
 }
-func readScreen(body string) screen            { return session.ReadScreen(body) }
+func readScreen(body string) screen { return session.ReadScreen(body) }
 func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
 	return session.Gather(permMiss)
 }
@@ -83,10 +83,10 @@ func bandOf(fl string) int          { return session.BandOf(fl) }
 func cleanName(title, path string) string {
 	return session.CleanName(title, path)
 }
-func markRead(pane string)              { session.MarkRead(pane) }
-func markUnread(pane string)            { session.MarkUnread(pane) }
-func saveFlag(sid, fl string)           { session.SaveFlag(sid, fl) }
-func setPaneFlag(pane, fl string)       { session.SetPaneFlag(pane, fl) }
+func markRead(pane string)        { session.MarkRead(pane) }
+func markUnread(pane string)      { session.MarkUnread(pane) }
+func saveFlag(sid, fl string)     { session.SaveFlag(sid, fl) }
+func setPaneFlag(pane, fl string) { session.SetPaneFlag(pane, fl) }
 
 func tmuxOut(a ...string) string   { return session.TmuxOut(a...) }
 func run(name string, a ...string) { _ = exec.Command(name, a...).Run() }

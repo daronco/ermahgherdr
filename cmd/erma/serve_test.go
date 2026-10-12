@@ -350,4 +350,3 @@ func TestToAPIFallsBackToPane(t *testing.T) {
 		t.Errorf("expected ID == Pane when no sid")
 	}
 }
-
