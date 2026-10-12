@@ -189,7 +189,7 @@ After=default.target
 [Service]
 Type=simple
 Environment=ERMA_TAILSCALE_LOGIN=you@example.com
-ExecStart=%h/.local/bin/erma --addr 127.0.0.1:8731
+ExecStart=%h/.local/bin/erma serve --addr 127.0.0.1:8731
 Restart=on-failure
 RestartSec=2
 
