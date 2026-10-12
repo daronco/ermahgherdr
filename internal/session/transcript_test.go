@@ -329,6 +329,8 @@ func TestValidSid(t *testing.T) {
 		{"aaaa1111-2222-3333-4444-555566667777", true},
 		{"", false}, {".", false}, {"..", false},
 		{"../x", false}, {"a/b", false}, {"a\\b", false}, {"/etc/passwd", false}, {"a..b", false},
+		{"*", false}, {"a?", false}, {"[ab]", false}, {"a.b", false}, {"a b", false},
+		{strings.Repeat("a", 129), false},
 	} {
 		if got := validSid(c.sid); got != c.want {
 			t.Errorf("validSid(%q) = %v, want %v", c.sid, got, c.want)

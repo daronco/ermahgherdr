@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -66,21 +67,12 @@ func claudeProjectsRoot() string {
 	return filepath.Join(dir, "projects")
 }
 
-// validSid: the sid may only be the base name of a .jsonl file. A real Claude
-// sid is a UUID, but we don't want to tie the parser to the exact shape;
-// instead reject anything that could ever leave the projects root.
-func validSid(sid string) bool {
-	if sid == "" || sid == "." || sid == ".." {
-		return false
-	}
-	if strings.ContainsAny(sid, "/\\") {
-		return false
-	}
-	if strings.Contains(sid, "..") {
-		return false
-	}
-	return true
-}
+// sidShape: a Claude session id is a UUID. Letters, digits and dashes cover it
+// without tying the reader to one version, and leave nothing a path or a glob
+// pattern could use — no separator, no dot, no * ? [.
+var sidShape = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+
+func validSid(sid string) bool { return sidShape.MatchString(sid) }
 
 // transcriptPath finds the .jsonl for sid under the projects root. Returns
 // ErrUnknownSession when no file exists.
