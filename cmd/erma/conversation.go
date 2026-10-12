@@ -9,7 +9,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -483,6 +482,3 @@ func (s *server) serveSessionRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// contextDone: helper so the stream handler stops reading transcripts the
-// moment the client leaves. Exported for the test that drives it.
-func contextDone(ctx context.Context) <-chan struct{} { return ctx.Done() }
