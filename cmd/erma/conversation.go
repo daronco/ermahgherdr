@@ -66,13 +66,6 @@ type convHub struct {
 	paneResolver func() map[string]string
 	tmux         tmuxRunner
 	mark         func(pane string)
-	// stateFn returns the current snapshot — the conversation stream reuses
-	// the main hub's gather path to emit `state` events.
-	stateFn func() []apiSession
-	// stateSubscribe hooks the main sseHub so the per-session stream wakes
-	// on bar updates without its own tmux fork.
-	stateSubscribe   func() chan []apiSession
-	stateUnsubscribe func(chan []apiSession)
 }
 
 func newConvHub() *convHub {
@@ -84,10 +77,13 @@ func newConvHub() *convHub {
 	}
 }
 
-// tokenFor returns the per-sid CSRF token, minting one on first ask.
+// tokenFor returns the per-sid CSRF token, minting one on first ask. Also
+// prunes entries for sids no longer in the registry — the map only ever grows
+// here, so pruning on the same path keeps it bounded for a long-running serve.
 func (c *convHub) tokenFor(sid string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.pruneCSRFLocked()
 	if t, ok := c.csrf[sid]; ok {
 		return t
 	}
@@ -96,6 +92,23 @@ func (c *convHub) tokenFor(sid string) string {
 	t := hex.EncodeToString(b[:])
 	c.csrf[sid] = t
 	return t
+}
+
+// pruneCSRFLocked drops csrf entries whose sid is no longer in the registry.
+// Caller holds c.mu. Skips the registry read when the map is empty.
+func (c *convHub) pruneCSRFLocked() {
+	if len(c.csrf) == 0 {
+		return
+	}
+	alive := map[string]struct{}{}
+	for _, s := range c.paneResolver() {
+		alive[s] = struct{}{}
+	}
+	for sid := range c.csrf {
+		if _, ok := alive[sid]; !ok {
+			delete(c.csrf, sid)
+		}
+	}
 }
 
 // checkToken: constant-time compare so a timing attacker cannot peel it off.
@@ -272,7 +285,14 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 				// rotated). Keep the stream open — the next tick may recover.
 				continue
 			}
-			if next != cursor && len(newTurns) > 0 {
+			// A truncated or rotated transcript resets the cursor to 0 and
+			// returns the whole file. Emit `conversation` so the client wipes
+			// its list; a `delta` here would duplicate every turn.
+			if next < cursor {
+				cursor = next
+				writeSSE(w, "conversation", conversationBody{Cursor: cursor, Turns: newTurns})
+				flusher.Flush()
+			} else if next != cursor && len(newTurns) > 0 {
 				cursor = next
 				writeSSE(w, "delta", conversationBody{Cursor: cursor, Turns: newTurns})
 				flusher.Flush()

@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -295,10 +296,17 @@ func summarizeToolInput(raw json.RawMessage) string {
 			}
 		}
 	}
-	// Fallback: comma-joined "k=v" of the top-level keys, truncated.
+	// Fallback: space-joined "k=v" of the top-level scalar keys, truncated.
+	// Keys are sorted so the summary is deterministic across runs — Go map
+	// iteration order would otherwise vary each call.
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	var parts []string
-	for k, v := range m {
-		switch vv := v.(type) {
+	for _, k := range keys {
+		switch vv := m[k].(type) {
 		case string:
 			parts = append(parts, k+"="+vv)
 		case float64:

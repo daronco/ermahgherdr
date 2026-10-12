@@ -32,6 +32,11 @@
   let csrf = '';
   let lastKnownState = ''; // for the permission banner
   let latestScreenPrompt = '';
+  // Set once the HTTP conversation has rendered. The SSE stream also fires a
+  // `conversation` event on connect; if it lands within the grace window below,
+  // we skip the second resetTurns to avoid a visible flash on slow links.
+  let httpRenderedAt = 0;
+  const BOOT_SSE_GRACE_MS = 1500;
 
   function setConn(state) {
     connEl.className = 'status ' + state;
@@ -159,7 +164,7 @@
     if (!csrf) return;
     await fetch('/api/sessions/' + encodeURIComponent(SID) + '/read', {
       method: 'POST',
-      headers: { 'X-Erma-CSRF': csrf, 'Content-Type': 'application/json' },
+      headers: { 'X-Erma-CSRF': csrf },
     });
   }
 
@@ -202,6 +207,13 @@
     es.addEventListener('conversation', (ev) => {
       try {
         const payload = JSON.parse(ev.data);
+        // On boot the HTTP conversation already rendered; the stream's first
+        // frame carries the same transcript, so re-rendering it just causes a
+        // flicker. Skip within the grace window; honor it on reconnect.
+        if (httpRenderedAt && Date.now() - httpRenderedAt < BOOT_SSE_GRACE_MS) {
+          httpRenderedAt = 0;
+          return;
+        }
         resetTurns(payload.turns);
       } catch (e) {
         console.error('conversation', e);
@@ -281,6 +293,7 @@
     try {
       const body = await callConversation();
       resetTurns(body.turns);
+      httpRenderedAt = Date.now();
       await callRead();
     } catch (e) {
       console.error('boot', e);
