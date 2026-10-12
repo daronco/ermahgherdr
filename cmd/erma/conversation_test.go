@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // tmuxCall records one tmux invocation the handler attempted. The test stub
@@ -384,6 +386,76 @@ func TestExtractSid(t *testing.T) {
 		if sid != c.wantSid || tail != c.wantTail || ok != c.wantOK {
 			t.Errorf("extractSid(%q) = (%q,%q,%v), want (%q,%q,%v)",
 				c.path, sid, tail, ok, c.wantSid, c.wantTail, c.wantOK)
+		}
+	}
+}
+
+// Every state-changing endpoint, not just /text, enforces Origin, CSRF and the
+// registry lookup — and a rejected request reaches neither tmux nor MarkRead.
+func TestStateChangingGatesOnEveryEndpoint(t *testing.T) {
+	endpoints := map[string]string{
+		"text": `{"text":"hi"}`,
+		"key":  `{"key":"esc"}`,
+		"read": `{}`,
+	}
+	gates := []struct {
+		name     string
+		origin   func(host string) string
+		token    func(tok string) string
+		unknown  bool
+		wantCode int
+	}{
+		{"no Origin", func(string) string { return "" }, func(t string) string { return t }, false, http.StatusForbidden},
+		{"foreign Origin", func(string) string { return "http://evil.example" }, func(t string) string { return t }, false, http.StatusForbidden},
+		{"no CSRF", func(h string) string { return "http://" + h }, func(string) string { return "" }, false, http.StatusForbidden},
+		{"wrong CSRF", func(h string) string { return "http://" + h }, func(string) string { return strings.Repeat("0", 64) }, false, http.StatusForbidden},
+		{"unknown sid", func(h string) string { return "http://" + h }, func(t string) string { return t }, true, http.StatusNotFound},
+	}
+	for ep, payload := range endpoints {
+		for _, g := range gates {
+			var marks int32
+			srv, calls := mkConvServer(t, map[string]string{"s1": "%1"}, &marks)
+			tok := mintCSRF(t, srv, "s1")
+			if g.unknown {
+				srv.conv.paneResolver = func() map[string]string { return map[string]string{} }
+			}
+			r := httptest.NewRequest(http.MethodPost, "/api/sessions/s1/"+ep, bytes.NewBufferString(payload))
+			r.Header.Set(headerLogin, "ok@example.com")
+			if o := g.origin(r.Host); o != "" {
+				r.Header.Set("Origin", o)
+			}
+			if tk := g.token(tok); tk != "" {
+				r.Header.Set("X-Erma-CSRF", tk)
+			}
+			w := httptest.NewRecorder()
+			srv.mux().ServeHTTP(w, r)
+			if w.Code != g.wantCode {
+				t.Errorf("%s / %s: got %d, want %d", ep, g.name, w.Code, g.wantCode)
+			}
+			if len(*calls) != 0 || atomic.LoadInt32(&marks) != 0 {
+				t.Errorf("%s / %s: side effect despite rejection: tmux=%+v marks=%d", ep, g.name, *calls, marks)
+			}
+		}
+	}
+}
+
+// The registry is the gate for reads too: a transcript on disk for a sid the
+// registry does not know is still a 404, on both GET routes.
+func TestReadRoutesRequireRegistry(t *testing.T) {
+	srv, _ := mkConvServer(t, map[string]string{"ghost": "%9"}, nil)
+	mintCSRF(t, srv, "ghost") // writes ghost.jsonl; then the registry forgets it
+	srv.conv.paneResolver = func() map[string]string { return map[string]string{"%1": "s1"} }
+	for _, tail := range []string{"/conversation", "/stream"} {
+		// The deadline only matters if the gate regresses: an open stream then
+		// ends with a 200 instead of hanging the test.
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		r := httptest.NewRequest(http.MethodGet, "/api/sessions/ghost"+tail, nil).WithContext(ctx)
+		r.Header.Set(headerLogin, "ok@example.com")
+		w := httptest.NewRecorder()
+		srv.mux().ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("GET ghost%s: got %d, want 404", tail, w.Code)
 		}
 	}
 }

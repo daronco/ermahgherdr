@@ -127,6 +127,7 @@ func TestReadConversationRejectsPathTraversal(t *testing.T) {
 	}
 	for _, bad := range []string{
 		"../nope",
+		"../../nope", // the one that would reach the stray file through the glob
 		"../../etc/passwd",
 		"/etc/passwd",
 		".",
@@ -314,6 +315,23 @@ func TestExtractPromptText(t *testing.T) {
 	} {
 		if got := extractPromptText(c.body); got != c.want {
 			t.Errorf("%s: extractPromptText = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// validSid on its own, so dropping it is caught even though transcriptPath's
+// Rel check would still stop an escape.
+func TestValidSid(t *testing.T) {
+	for _, c := range []struct {
+		sid  string
+		want bool
+	}{
+		{"aaaa1111-2222-3333-4444-555566667777", true},
+		{"", false}, {".", false}, {"..", false},
+		{"../x", false}, {"a/b", false}, {"a\\b", false}, {"/etc/passwd", false}, {"a..b", false},
+	} {
+		if got := validSid(c.sid); got != c.want {
+			t.Errorf("validSid(%q) = %v, want %v", c.sid, got, c.want)
 		}
 	}
 }
