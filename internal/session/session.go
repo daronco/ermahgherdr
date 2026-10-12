@@ -174,7 +174,7 @@ func PollPanes(panes []string) Poll {
 		"display-message", "-p", capSep, ";",
 		"list-clients", "-F", "#{client_pid}\t#{pane_id}\t#{session_name}:#{window_index}", ";",
 		"display-message", "-p", capSep, ";",
-		"show", "-gv", "@erma_sound", ";",
+		"show", "-gqv", "@erma_sound", ";",
 		"display-message", "-p", capSep, ";",
 		// -q: unset without dai-live, and an error would end the list here.
 		"show", "-gqv", "@dai_live_state",
