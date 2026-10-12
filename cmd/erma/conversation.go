@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -187,8 +188,18 @@ func originMatches(r *http.Request) bool {
 
 type conversationBody struct {
 	Csrf   string         `json:"csrf"`
-	Cursor session.Cursor `json:"cursor"`
+	Cursor session.Cursor `json:"cursor"` // where the stream picks up (?after=)
+	Start  session.Cursor `json:"start"`  // where these turns begin (?before= for the page above; 0 = none)
 	Turns  []session.Turn `json:"turns"`
+}
+
+// cursorParam: a non-negative byte offset from a query value or header.
+func cursorParam(v string) (session.Cursor, bool) {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return session.Cursor(n), true
 }
 
 func (s *server) handleConversation(w http.ResponseWriter, r *http.Request, sid string) {
@@ -202,14 +213,22 @@ func (s *server) handleConversation(w http.ResponseWriter, r *http.Request, sid 
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
-	var cur session.Cursor
-	if v := r.URL.Query().Get("after"); v != "" {
-		var n int64
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n >= 0 {
-			cur = session.Cursor(n)
-		}
+	// Default: the tail of the transcript (TailBytes), never the whole file —
+	// a long session's jsonl runs to tens of MB. ?before= pages back from a
+	// previous `start`; ?after= reads forward from a cursor.
+	var (
+		turns       []session.Turn
+		start, next session.Cursor
+		err         error
+	)
+	q := r.URL.Query()
+	if after, ok := cursorParam(q.Get("after")); ok {
+		start = after
+		turns, next, err = session.ReadConversation(sid, after)
+	} else {
+		before, _ := cursorParam(q.Get("before"))
+		turns, start, next, err = session.ReadConversationBefore(sid, before, session.TailBytes)
 	}
-	turns, next, err := session.ReadConversation(sid, cur)
 	if err != nil {
 		if errors.Is(err, session.ErrUnknownSession) {
 			http.Error(w, "unknown session", http.StatusNotFound)
@@ -225,6 +244,7 @@ func (s *server) handleConversation(w http.ResponseWriter, r *http.Request, sid 
 	_ = json.NewEncoder(w).Encode(conversationBody{
 		Csrf:   token,
 		Cursor: next,
+		Start:  start,
 		Turns:  turns,
 	})
 }
@@ -235,13 +255,16 @@ type streamEvent struct {
 	Data  any
 }
 
-// handleConversationStream: SSE for one sid. On connect, emits:
-//   - one `conversation` event with the full transcript and the current cursor
-//   - one `state` event with the session's current apiSession row
+// handleConversationStream: SSE for one sid. On connect it sends a `state`
+// event with the session's row and, unless the client says where it already is
+// (?after=, or Last-Event-ID on a reconnect), a `conversation` event with the
+// tail of the transcript.
 //
 // Then it tails the file via session.WatchTranscript (same 600 ms cadence as
 // the bar) and emits a `delta` event every time new turns show up, plus a
-// `state` event whenever the main hub broadcasts a change to this sid.
+// `state` event whenever the main hub broadcasts a change to this sid. Every
+// transcript frame carries its cursor as the SSE id, so the browser's
+// automatic reconnect resumes instead of replaying.
 func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request, sid string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -260,6 +283,7 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "keep-alive")
 	fmt.Fprintf(w, "retry: 3000\n\n")
+	flusher.Flush() // the client is connected even when nothing else is due yet
 
 	// Initial state snapshot: find the row for this sid in the main hub.
 	if row, ok := findRow(s.hub, sid); ok {
@@ -271,12 +295,16 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 	ch := s.hub.subscribe()
 	defer s.hub.unsubscribe(ch)
 
-	// Tail the transcript via the exported watcher. Its first emission is a
-	// Reset carrying the whole transcript — that is the initial `conversation`
-	// event. Later Reset frames mean the file rotated or was truncated and the
-	// client must replace its list.
+	// A Reset frame — the initial tail, or a fresh one after the file rotated
+	// or was truncated — is a `conversation` event: the client replaces its list.
+	from := session.Cursor(-1)
+	if c, ok := cursorParam(r.Header.Get("Last-Event-ID")); ok {
+		from = c
+	} else if c, ok := cursorParam(r.URL.Query().Get("after")); ok {
+		from = c
+	}
 	ctx := r.Context()
-	transcripts := session.WatchTranscript(ctx, sid, servePollInterval)
+	transcripts := session.WatchTranscript(ctx, sid, servePollInterval, from)
 
 	for {
 		select {
@@ -290,7 +318,8 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 			if tr.Reset {
 				event = "conversation"
 			}
-			writeSSE(w, event, conversationBody{Cursor: tr.Cursor, Turns: tr.Turns})
+			fmt.Fprintf(w, "id: %d\n", tr.Cursor)
+			writeSSE(w, event, conversationBody{Cursor: tr.Cursor, Start: tr.Start, Turns: tr.Turns})
 			flusher.Flush()
 		case snap := <-ch:
 			if row, ok := findRowIn(snap, sid); ok {

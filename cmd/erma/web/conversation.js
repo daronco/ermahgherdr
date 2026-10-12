@@ -25,6 +25,7 @@
   const replyEl = document.getElementById('reply');
   const sendBtn = document.getElementById('send');
   const voiceBtn = document.getElementById('voice');
+  const earlierBtn = document.getElementById('earlier');
 
   // The CSRF token issued by GET /conversation. Needed on every POST. The
   // conversation GET refreshes it; if we have none yet, state-changing POSTs
@@ -32,11 +33,10 @@
   let csrf = '';
   let lastKnownState = ''; // for the permission banner
   let latestScreenPrompt = '';
-  // Set once the HTTP conversation has rendered. The SSE stream also fires a
-  // `conversation` event on connect; if it lands within the grace window below,
-  // we skip the second resetTurns to avoid a visible flash on slow links.
-  let httpRenderedAt = 0;
-  const BOOT_SSE_GRACE_MS = 1500;
+  // The page holds the transcript from byte `start` to byte `cursor`: the
+  // stream resumes at `cursor`, "load earlier" pages back from `start`.
+  let cursor = 0;
+  let start = 0;
 
   function setConn(state) {
     connEl.className = 'status ' + state;
@@ -121,6 +121,22 @@
     window.scrollTo({ top: document.body.scrollHeight });
   }
 
+  // Older turns go above without moving what the reader is looking at.
+  function prependTurns(turns) {
+    if (!turns || turns.length === 0) return;
+    const before = document.body.scrollHeight;
+    const frag = document.createDocumentFragment();
+    for (const t of turns) frag.appendChild(renderTurn(t));
+    turnsEl.insertBefore(frag, turnsEl.firstChild);
+    emptyEl.hidden = turnsEl.children.length > 0;
+    window.scrollBy(0, document.body.scrollHeight - before);
+  }
+
+  function setStart(s) {
+    start = s || 0;
+    earlierBtn.hidden = start <= 0;
+  }
+
   function applyState(row) {
     if (!row) return;
     lastKnownState = row.state || '';
@@ -157,13 +173,27 @@
   }
 
   // Fetch helpers.
-  async function callConversation() {
-    const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/conversation');
+  async function callConversation(query) {
+    const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/conversation' + (query || ''));
     if (!res.ok) throw new Error('conversation ' + res.status);
     const body = await res.json();
     const token = res.headers.get('X-Erma-CSRF') || body.csrf || '';
     if (token) csrf = token;
     return body;
+  }
+
+  async function loadEarlier() {
+    if (start <= 0) return;
+    earlierBtn.disabled = true;
+    try {
+      const body = await callConversation('?before=' + start);
+      prependTurns(body.turns);
+      setStart(body.start);
+    } catch (e) {
+      console.error('earlier', e);
+    } finally {
+      earlierBtn.disabled = false;
+    }
   }
 
   async function callRead() {
@@ -204,23 +234,20 @@
     }
   }
 
-  // SSE connect: tails /stream, routes `conversation` | `delta` | `state`.
+  // SSE connect: tails /stream from the cursor the page already has, routes
+  // `conversation` | `delta` | `state`. A reconnect resumes by Last-Event-ID.
   function connect() {
     setConn('wait');
-    const es = new EventSource('/api/sessions/' + encodeURIComponent(SID) + '/stream');
+    const es = new EventSource('/api/sessions/' + encodeURIComponent(SID) + '/stream?after=' + cursor);
     es.addEventListener('open', () => setConn('live'));
     es.addEventListener('error', () => setConn('lost'));
     es.addEventListener('conversation', (ev) => {
       try {
+        // The transcript was rotated or truncated: a fresh tail replaces the list.
         const payload = JSON.parse(ev.data);
-        // On boot the HTTP conversation already rendered; the stream's first
-        // frame carries the same transcript, so re-rendering it just causes a
-        // flicker. Skip within the grace window; honor it on reconnect.
-        if (httpRenderedAt && Date.now() - httpRenderedAt < BOOT_SSE_GRACE_MS) {
-          httpRenderedAt = 0;
-          return;
-        }
         resetTurns(payload.turns);
+        setStart(payload.start);
+        cursor = payload.cursor;
       } catch (e) {
         console.error('conversation', e);
       }
@@ -229,6 +256,7 @@
       try {
         const payload = JSON.parse(ev.data);
         appendTurns(payload.turns);
+        cursor = payload.cursor;
       } catch (e) {
         console.error('delta', e);
       }
@@ -244,6 +272,7 @@
 
   // Wiring.
   sendBtn.addEventListener('click', () => callText(replyEl.value));
+  earlierBtn.addEventListener('click', loadEarlier);
   replyEl.addEventListener('keydown', (ev) => {
     // Enter sends; Shift+Enter inserts a newline. The textarea stays editable
     // even while a POST is in flight — the agent working does not block typing.
@@ -299,7 +328,8 @@
     try {
       const body = await callConversation();
       resetTurns(body.turns);
-      httpRenderedAt = Date.now();
+      setStart(body.start);
+      cursor = body.cursor;
       await callRead();
     } catch (e) {
       console.error('boot', e);

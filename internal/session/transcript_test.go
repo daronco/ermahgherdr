@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,7 +222,7 @@ func TestWatchTranscriptEmitsResetThenDelta(t *testing.T) {
 	home, sid := writeTranscript(t, []string{string(first)})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := WatchTranscript(ctx, sid, 20*time.Millisecond)
+	ch := WatchTranscript(ctx, sid, 20*time.Millisecond, -1)
 
 	// Initial Reset.
 	select {
@@ -335,5 +336,103 @@ func TestValidSid(t *testing.T) {
 		if got := validSid(c.sid); got != c.want {
 			t.Errorf("validSid(%q) = %v, want %v", c.sid, got, c.want)
 		}
+	}
+}
+
+func userLine(t *testing.T, text string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{
+		"type":    "user",
+		"message": map[string]any{"role": "user", "content": text},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func texts(turns []Turn) []string {
+	var out []string
+	for _, t := range turns {
+		out = append(out, t.Text)
+	}
+	return out
+}
+
+// Opening reads only the tail, and paging back by `start` walks the rest of the
+// file without gaps or repeats, down to offset 0.
+func TestReadConversationBeforePagesBack(t *testing.T) {
+	var lines, want []string
+	for i := 0; i < 40; i++ {
+		s := fmt.Sprintf("turn-%02d", i)
+		lines, want = append(lines, userLine(t, s)), append(want, s)
+	}
+	home, sid := writeTranscript(t, lines)
+	path := filepath.Join(home, ".claude", "projects", "-proj-a", sid+".jsonl")
+	st, _ := os.Stat(path)
+
+	turns, start, end, err := ReadConversationBefore(sid, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(end) != st.Size() || start == 0 || len(turns) == 0 || len(turns) > 5 {
+		t.Fatalf("tail: %d turns, start=%d end=%d (size %d)", len(turns), start, end, st.Size())
+	}
+	got := texts(turns)
+	for start > 0 {
+		var page []Turn
+		page, start, _, err = ReadConversationBefore(sid, start, 200)
+		if err != nil || len(page) == 0 {
+			t.Fatalf("page before %d: %d turns, err %v", start, len(page), err)
+		}
+		got = append(texts(page), got...)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("paged turns:\n got %v\nwant %v", got, want)
+	}
+}
+
+// A line longer than the window is still read whole, and a line still being
+// written at the end of the file is left for the tail.
+func TestReadConversationBeforeLongAndPartialLines(t *testing.T) {
+	long := userLine(t, strings.Repeat("x", 5000))
+	home, sid := writeTranscript(t, []string{userLine(t, "a"), long})
+	path := filepath.Join(home, ".claude", "projects", "-proj-a", sid+".jsonl")
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString(`{"type":"user","mess`)
+	f.Close()
+	st, _ := os.Stat(path)
+
+	turns, start, end, err := ReadConversationBefore(sid, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || len(turns[0].Text) != 5000 || start == 0 {
+		t.Fatalf("long line: %d turns, start=%d", len(turns), start)
+	}
+	if int64(end) != st.Size()-int64(len(`{"type":"user","mess`)) {
+		t.Errorf("end=%d includes the partial line (size %d)", end, st.Size())
+	}
+}
+
+// Resuming from a cursor sends no initial dump, only what is appended later.
+func TestWatchTranscriptResumesFromCursor(t *testing.T) {
+	home, sid := writeTranscript(t, []string{userLine(t, "old")})
+	path := filepath.Join(home, ".claude", "projects", "-proj-a", sid+".jsonl")
+	st, _ := os.Stat(path)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := WatchTranscript(ctx, sid, 20*time.Millisecond, Cursor(st.Size()))
+
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString(userLine(t, "new") + "\n")
+	f.Close()
+	select {
+	case tr := <-ch:
+		if tr.Reset || strings.Join(texts(tr.Turns), ",") != "new" {
+			t.Errorf("first frame: %+v", tr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no delta within 2s")
 	}
 }

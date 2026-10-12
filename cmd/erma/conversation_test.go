@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/daronco/ermahgherdr/internal/session"
 )
 
 // tmuxCall records one tmux invocation the handler attempted. The test stub
@@ -456,6 +460,130 @@ func TestReadRoutesRequireRegistry(t *testing.T) {
 		srv.mux().ServeHTTP(w, r)
 		if w.Code != http.StatusNotFound {
 			t.Errorf("GET ghost%s: got %d, want 404", tail, w.Code)
+		}
+	}
+}
+
+// writeLongTranscript replaces s1's transcript (set up by mintCSRF) with n
+// user turns, enough to run past session.TailBytes.
+func writeLongTranscript(t *testing.T, n int) int64 {
+	t.Helper()
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		line, _ := json.Marshal(map[string]any{
+			"type":    "user",
+			"message": map[string]any{"role": "user", "content": fmt.Sprintf("turn-%05d %s", i, strings.Repeat("x", 80))},
+		})
+		b.Write(append(line, '\n'))
+	}
+	path := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "projects", "-proj", "s1.jsonl")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return int64(b.Len())
+}
+
+func getConversation(t *testing.T, srv *server, query string) conversationBody {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/api/sessions/s1/conversation"+query, nil)
+	r.Header.Set(headerLogin, "ok@example.com")
+	w := httptest.NewRecorder()
+	srv.mux().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET conversation%s: %d", query, w.Code)
+	}
+	var body conversationBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// Opening a long transcript sends only its tail; ?before= pages back from it.
+func TestConversationOpensWithTail(t *testing.T) {
+	srv, _ := mkConvServer(t, map[string]string{"s1": "%1"}, nil)
+	mintCSRF(t, srv, "s1")
+	size := writeLongTranscript(t, 6000)
+
+	tail := getConversation(t, srv, "")
+	if int64(tail.Cursor) != size || tail.Start == 0 || int64(tail.Cursor-tail.Start) > session.TailBytes {
+		t.Fatalf("tail: start=%d cursor=%d size=%d", tail.Start, tail.Cursor, size)
+	}
+	if last := tail.Turns[len(tail.Turns)-1].Text; !strings.HasPrefix(last, "turn-05999") {
+		t.Errorf("tail does not end at the newest turn: %q", last)
+	}
+	page := getConversation(t, srv, fmt.Sprintf("?before=%d", tail.Start))
+	if page.Cursor != tail.Start || page.Start >= tail.Start || len(page.Turns) == 0 {
+		t.Fatalf("page: start=%d cursor=%d, tail start=%d", page.Start, page.Cursor, tail.Start)
+	}
+	first := strings.Fields(tail.Turns[0].Text)[0]
+	lastOfPage := strings.Fields(page.Turns[len(page.Turns)-1].Text)[0]
+	var a, b int
+	fmt.Sscanf(lastOfPage, "turn-%d", &a)
+	fmt.Sscanf(first, "turn-%d", &b)
+	if b != a+1 {
+		t.Errorf("gap between page and tail: %s then %s", lastOfPage, first)
+	}
+}
+
+// A stream told where the client already is sends no transcript dump — only
+// what is appended — and tags it with the cursor as the SSE id.
+func TestStreamResumesFromCursor(t *testing.T) {
+	srv, _ := mkConvServer(t, map[string]string{"s1": "%1"}, nil)
+	mintCSRF(t, srv, "s1")
+	size := writeLongTranscript(t, 10)
+	ts := httptest.NewServer(srv.mux())
+	defer ts.Close()
+
+	for _, c := range []struct{ name, query, lastID string }{
+		{"?after", fmt.Sprintf("?after=%d", size), ""},
+		{"Last-Event-ID", "", fmt.Sprint(size)},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/sessions/s1/stream"+c.query, nil)
+		req.Header.Set(headerLogin, "ok@example.com")
+		if c.lastID != "" {
+			req.Header.Set("Last-Event-ID", c.lastID)
+		}
+		resp, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "projects", "-proj", "s1.jsonl")
+		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		_, _ = f.WriteString(`{"type":"user","message":{"role":"user","content":"fresh"}}` + "\n")
+		f.Close()
+
+		var events []string
+		var id string
+		br := bufio.NewReader(resp.Body)
+		for len(events) == 0 || events[len(events)-1] != "delta" {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				break
+			}
+			if strings.HasPrefix(line, "event: ") {
+				events = append(events, strings.TrimSpace(strings.TrimPrefix(line, "event: ")))
+			}
+			if strings.HasPrefix(line, "id: ") {
+				id = strings.TrimSpace(strings.TrimPrefix(line, "id: "))
+			}
+		}
+		resp.Body.Close()
+		cancel()
+		for _, e := range events {
+			if e == "conversation" {
+				t.Errorf("%s: stream re-sent the transcript: %v", c.name, events)
+			}
+		}
+		if len(events) == 0 || events[len(events)-1] != "delta" {
+			t.Errorf("%s: no delta for the appended turn: %v", c.name, events)
+		}
+		if want := fmt.Sprint(size + int64(len(`{"type":"user","message":{"role":"user","content":"fresh"}}`)+1)); id != want {
+			t.Errorf("%s: delta id = %q, want %s", c.name, id, want)
+		}
+		if c, ok := cursorParam(id); ok {
+			size = int64(c) // the next case resumes after this append
 		}
 	}
 }

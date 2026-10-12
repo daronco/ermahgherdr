@@ -11,6 +11,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,7 @@ type Cursor int64
 type Transcript struct {
 	Turns  []Turn
 	Cursor Cursor
+	Start  Cursor // on a Reset: where its turns begin, for paging back
 	Reset  bool
 }
 
@@ -146,9 +148,75 @@ func ReadConversation(sid string, after Cursor) ([]Turn, Cursor, error) {
 		return nil, after, nil
 	}
 	consumed := buf[:nl+1]
-	nextCursor := Cursor(int64(after) + int64(len(consumed)))
+	return parseLines(consumed), Cursor(int64(after) + int64(len(consumed))), nil
+}
+
+// TailBytes: how far back the conversation view reaches when it opens, and
+// how much each "load earlier" page adds. A few dozen exchanges, and a
+// response of a few hundred KB however large the transcript has grown.
+const TailBytes = 256 << 10
+
+// ReadConversationBefore reads the complete lines that end at or before
+// `before` — the end of the file when before <= 0 or past it — reaching back
+// about max bytes, further only to finish a line longer than that. It returns
+// the turns, the offset of the first line read (0 once the start of the file
+// is reached; the next page's `before`) and the offset after the last complete
+// line (where a forward tail picks up).
+func ReadConversationBefore(sid string, before Cursor, max int64) ([]Turn, Cursor, Cursor, error) {
+	path, err := transcriptPath(sid)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, 0, ErrUnknownSession
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	end := int64(before)
+	if end <= 0 || end > st.Size() {
+		end = st.Size()
+	}
+	for lo := end - max; ; lo -= max {
+		if lo < 0 {
+			lo = 0
+		}
+		from := lo
+		if lo > 0 {
+			from = lo - 1 // one byte back: is lo already the start of a line?
+		}
+		buf := make([]byte, end-from)
+		n, err := f.ReadAt(buf, from)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, 0, 0, err
+		}
+		buf = buf[:n]
+		start := 0
+		if lo > 0 {
+			i := bytes.IndexByte(buf, '\n')
+			if i < 0 {
+				continue // inside one long line: reach further back
+			}
+			start = i + 1
+		}
+		stop := bytesLastIndexByte(buf, '\n') + 1
+		if stop <= start {
+			if lo > 0 {
+				continue
+			}
+			return nil, 0, 0, nil // not one complete line yet
+		}
+		return parseLines(buf[start:stop]), Cursor(from + int64(start)), Cursor(from + int64(stop)), nil
+	}
+}
+
+// parseLines folds newline-terminated JSONL into the turns the UI renders.
+func parseLines(b []byte) []Turn {
 	var turns []Turn
-	for _, line := range splitLines(consumed) {
+	for _, line := range splitLines(b) {
 		line = trimTrailingCR(line)
 		if len(line) == 0 {
 			continue
@@ -157,7 +225,20 @@ func ReadConversation(sid string, after Cursor) ([]Turn, Cursor, error) {
 			turns = append(turns, t)
 		}
 	}
-	return turns, nextCursor, nil
+	return turns
+}
+
+// transcriptSize: the current size of sid's transcript.
+func transcriptSize(sid string) (int64, error) {
+	path, err := transcriptPath(sid)
+	if err != nil {
+		return 0, err
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return st.Size(), nil
 }
 
 // jsonlEntry: the subset of a JSONL row ReadConversation needs. Everything
@@ -423,33 +504,39 @@ func trimTrailingCR(b []byte) []byte {
 }
 
 // WatchTranscript tails sid's JSONL file at interval, emitting a Transcript on
-// the returned channel every time new turns show up. The first emission is a
-// Reset carrying the whole transcript (so a late subscriber does not need a
-// separate initial fetch); subsequent emissions carry only the new turns, with
-// Reset=true again on file rotation or truncation. The goroutine ends — and the
-// channel closes — when ctx is cancelled.
+// the returned channel every time new turns show up. With from < 0 the first
+// emission is a Reset carrying the tail (ReadConversationBefore, TailBytes);
+// with from >= 0 it resumes there and sends only what is new. A file that
+// shrinks below the cursor (rotation, truncation) sends a fresh tail as a
+// Reset. The goroutine ends — and the channel closes — when ctx is cancelled.
 //
 // A tick that reads nothing new emits nothing: the caller gets at most one
 // frame per real change, so a quiet session does not wake its consumers.
-func WatchTranscript(ctx context.Context, sid string, interval time.Duration) <-chan Transcript {
+func WatchTranscript(ctx context.Context, sid string, interval time.Duration, from Cursor) <-chan Transcript {
 	out := make(chan Transcript)
+	tail := func() Transcript {
+		// A missing file still yields an empty Reset, so a subscriber knows it is
+		// connected; the next tick picks the file up when it appears.
+		turns, start, end, _ := ReadConversationBefore(sid, 0, TailBytes)
+		return Transcript{Turns: turns, Cursor: end, Start: start, Reset: true}
+	}
 	go func() {
 		defer close(out)
-		var cursor Cursor
-		// Initial dump. A read error (the jsonl is not there yet) still gets a
-		// Reset frame with an empty transcript, so a subscriber knows it is
-		// connected and sees nothing — the loop recovers on the next tick when
-		// the file shows up.
-		turns, next, err := ReadConversation(sid, 0)
-		if err == nil {
-			cursor = next
-		} else {
-			turns = nil
+		send := func(tr Transcript) bool {
+			select {
+			case <-ctx.Done():
+				return false
+			case out <- tr:
+				return true
+			}
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case out <- Transcript{Turns: turns, Cursor: cursor, Reset: true}:
+		cursor := from
+		if from < 0 {
+			tr := tail()
+			cursor = tr.Cursor
+			if !send(tr) {
+				return
+			}
 		}
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -458,30 +545,26 @@ func WatchTranscript(ctx context.Context, sid string, interval time.Duration) <-
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				newTurns, next, err := ReadConversation(sid, cursor)
-				if err != nil {
-					// The transcript may vanish mid-stream (claude crashed,
-					// file rotated). Keep watching — the next tick may recover.
-					continue
-				}
-				var frame Transcript
-				switch {
-				case next < cursor:
-					// Truncation / rotation: the whole file is the new state.
-					cursor = next
-					frame = Transcript{Turns: newTurns, Cursor: cursor, Reset: true}
-				case next != cursor && len(newTurns) > 0:
-					cursor = next
-					frame = Transcript{Turns: newTurns, Cursor: cursor}
-				default:
-					cursor = next
-					continue
-				}
-				select {
-				case <-ctx.Done():
+			}
+			size, err := transcriptSize(sid)
+			if err != nil {
+				continue // the transcript may vanish mid-stream; the next tick may recover
+			}
+			if size < int64(cursor) {
+				tr := tail()
+				cursor = tr.Cursor
+				if !send(tr) {
 					return
-				case out <- frame:
 				}
+				continue
+			}
+			turns, next, err := ReadConversation(sid, cursor)
+			if err != nil || next == cursor {
+				continue
+			}
+			cursor = next
+			if len(turns) > 0 && !send(Transcript{Turns: turns, Cursor: cursor}) {
+				return
 			}
 		}
 	}()
