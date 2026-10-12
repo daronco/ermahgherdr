@@ -160,6 +160,61 @@ a handful of tmux options and one state file. See
 window `<n>`. `s` toggles the sound, same as clicking the badge in the counter
 row.
 
+## Running `erma serve`
+
+`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. This PR ships the list + SSE only — read-only; see the issue roadmap for per-session reads and the conversation view.
+
+Flags:
+
+- `--addr` — the TCP address to listen on. Defaults to `127.0.0.1:0`, picking an ephemeral loopback port. A non-loopback address is **refused** unless you also pass `--insecure-non-loopback`.
+- `--tailscale-login` (or `$ERMA_TAILSCALE_LOGIN`) — the tailnet login this server trusts. Required unless `--dev-skip-auth` is set.
+- `--dev-skip-auth` — the ONLY way to bypass identity checks. Logs a loud warning on start. Do not use with a public listener.
+- `--insecure-non-loopback` — allow binding to a non-loopback address. Dangerous: the port is then open to anyone who can reach it on the LAN.
+
+Auth model, enforced on every request (static assets, API, SSE):
+
+- A missing `Tailscale-User-Login` header gives `401`.
+- A header that does not match the configured login gives `403`.
+- A `Tailscale-Funnel-Request` marker gives `403` even with the right login — Funnel strips identity and would otherwise impersonate the match path.
+
+### systemd `--user` unit
+
+Drop this at `~/.config/systemd/user/erma-serve.service`, replacing the login with your own:
+
+```ini
+[Unit]
+Description=erma serve — read-only HTTP view of Claude tmux sessions
+After=default.target
+
+[Service]
+Type=simple
+Environment=ERMA_TAILSCALE_LOGIN=you@example.com
+ExecStart=%h/.local/bin/erma --addr 127.0.0.1:8731
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+Then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now erma-serve.service
+journalctl --user -u erma-serve -f
+```
+
+### Exposing over Tailscale
+
+With the server bound to `127.0.0.1:8731`, hand that port to `tailscale serve` for HTTPS over your tailnet:
+
+```sh
+tailscale serve --https=443 http://127.0.0.1:8731
+```
+
+That gives you `https://<hostname>.<tailnet>.ts.net/` from any device signed in to your tailnet, with Tailscale injecting the identity header the server checks. **Do not** use `tailscale funnel` — the server refuses Funnel-marked requests on purpose, and the loopback bind would block it anyway.
+
 ## Security
 
 Every pull request to `main` (and every push to `main`) runs the following
