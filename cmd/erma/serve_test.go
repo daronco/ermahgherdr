@@ -401,3 +401,34 @@ func TestShutdownWithOpenStream(t *testing.T) {
 		t.Fatal("serveOn still running 2s after cancel with an open stream")
 	}
 }
+
+// A subscriber that falls behind gets the newest snapshot, not a stale one and
+// not nothing: a pending frame is replaced rather than dropped.
+func TestSSEHubSlowSubscriberGetsLatest(t *testing.T) {
+	var state atomic.Value
+	state.Store([]apiSession{{Pane: "%1", State: "idle"}})
+	hub := &sseHub{subscribers: map[chan []apiSession]struct{}{}}
+	hub.gather = func() []apiSession { return state.Load().([]apiSession) }
+	ch := hub.subscribe()
+	defer hub.unsubscribe(ch)
+
+	hub.tick() // idle, never read
+	state.Store([]apiSession{{Pane: "%1", State: "urgent"}})
+	hub.tick()
+	state.Store([]apiSession{{Pane: "%1", State: "done"}})
+	hub.tick()
+
+	select {
+	case rows := <-ch:
+		if len(rows) != 1 || rows[0].State != "done" {
+			t.Errorf("slow subscriber got %+v, want the latest (done)", rows)
+		}
+	default:
+		t.Fatal("slow subscriber got nothing")
+	}
+	select {
+	case rows := <-ch:
+		t.Errorf("stale frame still queued: %+v", rows)
+	default:
+	}
+}

@@ -379,9 +379,9 @@ func newSSEHub() *sseHub {
 }
 
 func (h *sseHub) subscribe() chan []apiSession {
-	// Buffered: a slow consumer should not stall the hub, and SSE is
-	// drop-the-oldest acceptable since every event is a full snapshot.
-	ch := make(chan []apiSession, 4)
+	// One slot: every event is a full snapshot, so a slow consumer only ever
+	// needs the newest one — tick replaces a pending frame instead of queueing.
+	ch := make(chan []apiSession, 1)
 	h.mu.Lock()
 	h.subscribers[ch] = struct{}{}
 	h.mu.Unlock()
@@ -434,11 +434,13 @@ func (h *sseHub) tick() {
 		return
 	}
 	for _, ch := range subs {
+		// The hub is the only sender, so after draining a stale frame the send
+		// cannot block.
 		select {
-		case ch <- snap:
+		case <-ch:
 		default:
-			// a stalled subscriber: skip this frame, next poll catches it up.
 		}
+		ch <- snap
 	}
 }
 
