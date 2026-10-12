@@ -1,7 +1,7 @@
 // erma serve — per-session conversation endpoints: transcript, SSE stream,
 // reply box (text), quick keys, and the read ack. Every state-changing POST
-// goes through two gates (Origin match + CSRF token) and resolves the sid to
-// a tmux pane via the registry; a sid the registry doesn't know is a 404.
+// needs a matching Origin, a sid that is one of the Claude panes the hub
+// discovered (else 404), and that sid's CSRF token.
 //
 // Security: tmux is only ever invoked via exec.Command("tmux", argv…); the
 // user's text goes to `tmux load-buffer -b <buf> -` on stdin, NEVER on argv.
@@ -51,8 +51,8 @@ func defaultTmux(stdin io.Reader, argv ...string) error {
 //     the X-Erma-CSRF header. One sid → one token; a replay beats a reused
 //     string, which is enough against a dumb attacker behind the Tailscale
 //     perimeter.
-//   - paneResolver: sid → pane, defaults to session.PaneSessions(). A test
-//     replaces this with a static map so no tmux is required.
+//   - paneResolver: pane → sid for the Claude panes in the hub's live snapshot
+//     (livePanes). A test replaces this with a static map so no tmux is required.
 //   - tmux: the runner above. A test replaces it with a recording stub.
 //   - mark: the read-ack call. Default is session.MarkRead; a test counts
 //     invocations.
@@ -64,10 +64,26 @@ type convHub struct {
 	mark         func(pane string)
 }
 
-func newConvHub() *convHub {
+// livePanes: pane → sid for the Claude panes the hub last discovered. The raw
+// registry is not enough: an entry whose pid was reused, or that names a pane
+// on another tmux server, points a sid at whatever pane now has that id.
+func livePanes(h *sseHub) func() map[string]string {
+	return func() map[string]string {
+		rows, _ := h.snapshot()
+		out := map[string]string{}
+		for _, r := range rows {
+			if r.ID != r.Pane { // a registry-backed sid, not the pane-id fallback
+				out[r.Pane] = r.ID
+			}
+		}
+		return out
+	}
+}
+
+func newConvHub(hub *sseHub) *convHub {
 	return &convHub{
 		csrf:         map[string]string{},
-		paneResolver: session.PaneSessions,
+		paneResolver: livePanes(hub),
 		tmux:         defaultTmux,
 		mark:         session.MarkRead,
 	}
@@ -125,9 +141,8 @@ func (c *convHub) checkToken(sid, got string) bool {
 	return diff == 0
 }
 
-// resolvePane: sid → pane via the registry. "" + false when the registry does
-// not currently know the sid. (The spec: the client NEVER passes a path or a
-// pane; the server does the lookup every time.)
+// resolvePane: sid → pane among the live Claude panes. "" + false when none
+// carries the sid. The client never passes a path or a pane.
 func (c *convHub) resolvePane(sid string) (string, bool) {
 	for pane, s := range c.paneResolver() {
 		if s == sid {
@@ -319,13 +334,13 @@ func (s *server) handleText(w http.ResponseWriter, r *http.Request, sid string) 
 		http.Error(w, "forbidden: Origin mismatch", http.StatusForbidden)
 		return
 	}
-	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
-		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
-		return
-	}
 	pane, ok := s.conv.resolvePane(sid)
 	if !ok {
 		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
+		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
 		return
 	}
 	var body textBody
@@ -408,13 +423,13 @@ func (s *server) handleKey(w http.ResponseWriter, r *http.Request, sid string) {
 		http.Error(w, "forbidden: Origin mismatch", http.StatusForbidden)
 		return
 	}
-	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
-		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
-		return
-	}
 	pane, ok := s.conv.resolvePane(sid)
 	if !ok {
 		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
+		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
 		return
 	}
 	var body keyBody
@@ -443,13 +458,13 @@ func (s *server) handleRead(w http.ResponseWriter, r *http.Request, sid string) 
 		http.Error(w, "forbidden: Origin mismatch", http.StatusForbidden)
 		return
 	}
-	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
-		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
-		return
-	}
 	pane, ok := s.conv.resolvePane(sid)
 	if !ok {
 		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
+		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
 		return
 	}
 	s.conv.mark(pane)

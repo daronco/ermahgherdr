@@ -233,10 +233,11 @@ type server struct {
 }
 
 func newServer(sf serveFlags) *server {
+	hub := newSSEHub()
 	return &server{
 		flags: sf,
-		hub:   newSSEHub(),
-		conv:  newConvHub(),
+		hub:   hub,
+		conv:  newConvHub(hub),
 	}
 }
 
