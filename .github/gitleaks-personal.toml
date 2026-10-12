@@ -2,6 +2,10 @@
 # repo. Patterns only: listing the real values here would itself be the leak.
 # Separate from the default ruleset on purpose: the default global allowlist
 # suppresses some of these matches (e.g. home paths).
+# This file only holds patterns; its own text must not count as a hit.
+[allowlist]
+paths = ['''^\.github/gitleaks-personal\.toml$''']
+
 [[rules]]
 id = "tailnet-hostname"
 description = "Real Tailscale MagicDNS name (use <hostname>.<tailnet>.ts.net)"
