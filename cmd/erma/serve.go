@@ -40,15 +40,16 @@ const servePollInterval = 600 * time.Millisecond
 // what the PWA actually needs today — enough to render the list the bar paints.
 // Keep the field names in lockstep with the client (cmd/erma/web/app.js).
 type apiSession struct {
-	ID    string `json:"id"`    // sessionId, or the pane id when no registry file exists yet
-	Pane  string `json:"pane"`  // tmux pane id (%42)
-	Name  string `json:"name"`  // human-readable label
-	State string `json:"state"` // idle | done | proc | urgent
-	Since int64  `json:"since"` // unix seconds the state has held
-	Marks string `json:"marks"` // "" | paused | prio
-	Sub   int    `json:"sub"`   // subagents under this session
-	Ctx   string `json:"ctx"`   // @erma_ctx_used (percent as string), may be empty
-	Dai   bool   `json:"dai"`   // the dai-live pinned session
+	ID     string `json:"id"`               // sessionId, or the pane id when no registry file exists yet
+	Pane   string `json:"pane"`             // tmux pane id (%42)
+	Name   string `json:"name"`             // human-readable label
+	State  string `json:"state"`            // idle | done | proc | urgent
+	Since  int64  `json:"since"`            // unix seconds the state has held
+	Marks  string `json:"marks"`            // "" | paused | prio
+	Sub    int    `json:"sub"`              // subagents under this session
+	Ctx    string `json:"ctx"`              // @erma_ctx_used (percent as string), may be empty
+	Dai    bool   `json:"dai"`              // the dai-live pinned session
+	Prompt string `json:"prompt,omitempty"` // the pending permission question, parsed off the pane's screen
 }
 
 // stateString: the state enum, in the exact spelling the front-end switches on.
@@ -77,6 +78,7 @@ func toAPI(s session.Session) apiSession {
 		ID: id, Pane: s.Pane, Name: s.Name,
 		State: stateString(s.St), Since: s.Since,
 		Marks: s.Flag, Sub: s.Sub, Ctx: s.Ctx, Dai: s.Dai,
+		Prompt: s.Prompt,
 	}
 }
 

@@ -66,6 +66,7 @@ type Session struct {
 	Ctx                 string // @erma_ctx_used: % of the room to auto-compact already spent
 	Sub                 int    // subagents running under it (@erma_sub)
 	Dai                 bool   // the Dai session dai-live keeps (pane option @dai_live)
+	Prompt              string // the question text parsed off the pane's screen, when a dialog is up
 	S, W, P             int
 }
 
@@ -73,9 +74,10 @@ type Session struct {
 // clients are attached, and the shared sound flag.
 type Poll struct {
 	Screens map[string]Screen
-	Clients []int  // client pids, for the focus rule
-	Current string // the pane the first attached client is showing
-	Win     string // and its window, as session:index
+	Prompts map[string]string // pane → the on-screen question text, when a dialog is up
+	Clients []int             // client pids, for the focus rule
+	Current string            // the pane the first attached client is showing
+	Win     string            // and its window, as session:index
 	Sound   bool
 	Live    string // @dai_live_state, set by dai-live; "" without it
 }
@@ -204,10 +206,16 @@ func PollPanes(panes []string) Poll {
 		return poll // a pane is showing our marker: bail rather than misalign
 	}
 	poll.Screens = map[string]Screen{}
+	poll.Prompts = map[string]string{}
 	for i, blk := range blocks[4:] {
 		if i < len(panes) && strings.TrimSpace(blk) != "" {
 			if sc := ReadScreen(blk); !sc.Viewer {
 				poll.Screens[panes[i]] = sc
+				if sc.Prompt || sc.Form {
+					if q := extractPromptText(blk); q != "" {
+						poll.Prompts[panes[i]] = q
+					}
+				}
 			}
 		}
 	}
@@ -247,6 +255,62 @@ func ReadScreen(body string) Screen {
 	// cursor. A numbered list Claude merely wrote out has no cursor.
 	sc.Prompt = sc.Prompt || esc || ask || (cursored && opts > 1)
 	return sc
+}
+
+// extractPromptText pulls the pane's on-screen question out of a dialog body —
+// what the user is actually being asked, so the PWA can show it as the
+// permission banner instead of a generic placeholder. The caller is expected
+// to have already decided a dialog is up (sc.Prompt || sc.Form).
+//
+// The question is picked from the foot region (same split ReadScreen uses),
+// preferring a line that carries one of the marker phrases. Falling back to
+// the first printable non-option, non-separator line keeps something useful
+// on screen when the exact phrasing changes between Claude Code versions.
+func extractPromptText(body string) string {
+	_, foot := regions(strings.Split(body, "\n"))
+	// Preferred: the line that carries a question marker.
+	for _, ln := range foot {
+		l := strings.ToLower(ln)
+		if strings.Contains(l, "do you want to ") ||
+			strings.Contains(l, "choose an option") ||
+			strings.Contains(l, "requests your input") ||
+			strings.Contains(l, "run a dynamic workflow?") ||
+			strings.Contains(l, "enter to confirm") ||
+			strings.Contains(l, "enter to select") {
+			if s := trimPromptLine(ln); s != "" {
+				return s
+			}
+		}
+	}
+	// Fallback: the first non-empty line that is not a separator, an option
+	// row, or the trailing "Esc to cancel" footer.
+	for _, ln := range foot {
+		s := trimPromptLine(ln)
+		if s == "" {
+			continue
+		}
+		trimmed := strings.TrimLeft(ln, " │")
+		if optLine.MatchString(trimmed) {
+			continue
+		}
+		low := strings.ToLower(s)
+		if strings.HasPrefix(low, "esc to cancel") {
+			continue
+		}
+		return s
+	}
+	return ""
+}
+
+// trimPromptLine strips the box-drawing characters and leading whitespace
+// Claude Code uses to frame a dialog line, so the question reads cleanly.
+func trimPromptLine(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimLeft(s, " │╌─")
+	s = strings.TrimRight(s, " │╌─")
+	s = strings.TrimSpace(s)
+	// A pure separator row ("────") trims to empty.
+	return s
 }
 
 // StatusOf folds the pane mark (what the hooks last saw), the screen and the
@@ -508,8 +572,9 @@ func gather(permMiss map[string]int, write bool) ([]Session, Poll) {
 		rows = append(rows, Session{
 			Pane: c[0], SessWin: c[1] + ":" + c[2], Name: name, Sid: sid, Flag: fl,
 			Mark: wait, St: st, Since: since, Ctx: strings.TrimSpace(c[9]), Sub: len(strings.Fields(c[10])),
-			Dai: c[12] != "", // dai-live marks it with its data directory
-			S:   atoi(c[1]), W: atoi(c[2]), P: atoi(c[3]),
+			Dai:    c[12] != "", // dai-live marks it with its data directory
+			Prompt: poll.Prompts[c[0]],
+			S:      atoi(c[1]), W: atoi(c[2]), P: atoi(c[3]),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { // stable by loc — never reorders under the cursor

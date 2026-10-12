@@ -12,6 +12,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,15 @@ type ToolCall struct {
 // Cursor: a byte offset into the JSONL file. The client treats it as opaque.
 // A new session (first read) starts at 0.
 type Cursor int64
+
+// Transcript: one emission from WatchTranscript. Reset=true means the file was
+// rotated/truncated (or this is the first dump), and the consumer should
+// discard whatever it had and replace it with Turns.
+type Transcript struct {
+	Turns  []Turn
+	Cursor Cursor
+	Reset  bool
+}
 
 // ErrUnknownSession: the sid is not currently tracked. 404 at the HTTP layer.
 var ErrUnknownSession = errors.New("session: unknown session id")
@@ -419,4 +429,70 @@ func trimTrailingCR(b []byte) []byte {
 		return b[:n-1]
 	}
 	return b
+}
+
+// WatchTranscript tails sid's JSONL file at interval, emitting a Transcript on
+// the returned channel every time new turns show up. The first emission is a
+// Reset carrying the whole transcript (so a late subscriber does not need a
+// separate initial fetch); subsequent emissions carry only the new turns, with
+// Reset=true again on file rotation or truncation. The goroutine ends — and the
+// channel closes — when ctx is cancelled.
+//
+// A tick that reads nothing new emits nothing: the caller gets at most one
+// frame per real change, so a quiet session does not wake its consumers.
+func WatchTranscript(ctx context.Context, sid string, interval time.Duration) <-chan Transcript {
+	out := make(chan Transcript)
+	go func() {
+		defer close(out)
+		var cursor Cursor
+		// Initial dump. A read error (the jsonl is not there yet) still gets a
+		// Reset frame with an empty transcript, so a subscriber knows it is
+		// connected and sees nothing — the loop recovers on the next tick when
+		// the file shows up.
+		turns, next, err := ReadConversation(sid, 0)
+		if err == nil {
+			cursor = next
+		} else {
+			turns = nil
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case out <- Transcript{Turns: turns, Cursor: cursor, Reset: true}:
+		}
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				newTurns, next, err := ReadConversation(sid, cursor)
+				if err != nil {
+					// The transcript may vanish mid-stream (claude crashed,
+					// file rotated). Keep watching — the next tick may recover.
+					continue
+				}
+				var frame Transcript
+				switch {
+				case next < cursor:
+					// Truncation / rotation: the whole file is the new state.
+					cursor = next
+					frame = Transcript{Turns: newTurns, Cursor: cursor, Reset: true}
+				case next != cursor && len(newTurns) > 0:
+					cursor = next
+					frame = Transcript{Turns: newTurns, Cursor: cursor}
+				default:
+					cursor = next
+					continue
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case out <- frame:
+				}
+			}
+		}
+	}()
+	return out
 }

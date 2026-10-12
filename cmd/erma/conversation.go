@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/daronco/ermahgherdr/internal/session"
 )
@@ -228,9 +227,9 @@ type streamEvent struct {
 //   - one `conversation` event with the full transcript and the current cursor
 //   - one `state` event with the session's current apiSession row
 //
-// Then it tails the file (same 600 ms cadence as the bar) and emits a `delta`
-// event every time new turns show up, plus a `state` event whenever the main
-// hub broadcasts a change to this sid.
+// Then it tails the file via session.WatchTranscript (same 600 ms cadence as
+// the bar) and emits a `delta` event every time new turns show up, plus a
+// `state` event whenever the main hub broadcasts a change to this sid.
 func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request, sid string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -250,15 +249,6 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	fmt.Fprintf(w, "retry: 3000\n\n")
 
-	// Initial transcript dump.
-	turns, cursor, err := session.ReadConversation(sid, 0)
-	if err != nil && !errors.Is(err, session.ErrUnknownSession) {
-		http.Error(w, "read transcript: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeSSE(w, "conversation", conversationBody{Cursor: cursor, Turns: turns})
-	flusher.Flush()
-
 	// Initial state snapshot: find the row for this sid in the main hub.
 	if row, ok := findRow(s.hub, sid); ok {
 		writeSSE(w, "state", row)
@@ -269,36 +259,27 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 	ch := s.hub.subscribe()
 	defer s.hub.unsubscribe(ch)
 
-	// Tail the transcript at the bar's cadence.
-	tick := time.NewTicker(servePollInterval)
-	defer tick.Stop()
-
+	// Tail the transcript via the exported watcher. Its first emission is a
+	// Reset carrying the whole transcript — that is the initial `conversation`
+	// event. Later Reset frames mean the file rotated or was truncated and the
+	// client must replace its list.
 	ctx := r.Context()
+	transcripts := session.WatchTranscript(ctx, sid, servePollInterval)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
-			newTurns, next, err := session.ReadConversation(sid, cursor)
-			if err != nil {
-				// The session file may vanish mid-stream (claude crashed, file
-				// rotated). Keep the stream open — the next tick may recover.
-				continue
+		case tr, ok := <-transcripts:
+			if !ok {
+				return
 			}
-			// A truncated or rotated transcript resets the cursor to 0 and
-			// returns the whole file. Emit `conversation` so the client wipes
-			// its list; a `delta` here would duplicate every turn.
-			if next < cursor {
-				cursor = next
-				writeSSE(w, "conversation", conversationBody{Cursor: cursor, Turns: newTurns})
-				flusher.Flush()
-			} else if next != cursor && len(newTurns) > 0 {
-				cursor = next
-				writeSSE(w, "delta", conversationBody{Cursor: cursor, Turns: newTurns})
-				flusher.Flush()
-			} else {
-				cursor = next
+			event := "delta"
+			if tr.Reset {
+				event = "conversation"
 			}
+			writeSSE(w, event, conversationBody{Cursor: tr.Cursor, Turns: tr.Turns})
+			flusher.Flush()
 		case snap := <-ch:
 			if row, ok := findRowIn(snap, sid); ok {
 				writeSSE(w, "state", row)
@@ -501,4 +482,3 @@ func (s *server) serveSessionRoute(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
-

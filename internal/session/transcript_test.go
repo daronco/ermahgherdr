@@ -1,12 +1,14 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeTranscript builds a Claude-shaped projects root at tmp/.claude/projects/
@@ -205,5 +207,113 @@ func TestReadConversationPartialLine(t *testing.T) {
 	}
 	if turns2[0].Text != "next" {
 		t.Errorf("completion lost: %+v", turns2[0])
+	}
+}
+
+// WatchTranscript emits a Reset carrying the current transcript on connect,
+// then one delta per append — nothing when the file is quiet.
+func TestWatchTranscriptEmitsResetThenDelta(t *testing.T) {
+	first, _ := json.Marshal(map[string]any{
+		"type":    "user",
+		"message": map[string]any{"role": "user", "content": "one"},
+	})
+	home, sid := writeTranscript(t, []string{string(first)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := WatchTranscript(ctx, sid, 20*time.Millisecond)
+
+	// Initial Reset.
+	select {
+	case tr, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before initial Reset")
+		}
+		if !tr.Reset || len(tr.Turns) != 1 || tr.Turns[0].Text != "one" {
+			t.Fatalf("initial frame: %+v", tr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no initial frame within 2s")
+	}
+
+	// Append a second line.
+	path := filepath.Join(home, ".claude", "projects", "-proj-a", sid+".jsonl")
+	second, _ := json.Marshal(map[string]any{
+		"type":    "user",
+		"message": map[string]any{"role": "user", "content": "two"},
+	})
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(append(second, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Delta carrying just the new line.
+	select {
+	case tr, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delta")
+		}
+		if tr.Reset {
+			t.Errorf("second frame should be a delta, not a reset: %+v", tr)
+		}
+		if len(tr.Turns) != 1 || tr.Turns[0].Text != "two" {
+			t.Errorf("delta turns: %+v", tr.Turns)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no delta within 2s of append")
+	}
+
+	// Cancelling the context closes the channel.
+	cancel()
+	select {
+	case _, ok := <-ch:
+		if ok {
+			// Drain one extra frame then expect close.
+			select {
+			case _, ok := <-ch:
+				if ok {
+					t.Error("channel not closed after cancel")
+				}
+			case <-time.After(2 * time.Second):
+				t.Error("channel not closed within 2s of cancel")
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("channel not closed within 2s of cancel")
+	}
+}
+
+// extractPromptText pulls the asked-for question out of a pane body so the
+// permission banner carries the real text rather than a generic placeholder.
+func TestExtractPromptText(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			"do-you-want-to",
+			" Create file\n permprobe-xyz.txt\n╌╌╌\n  1 hello\n╌╌╌\n" +
+				" Do you want to create permprobe-xyz.txt?\n ❯ 1. Yes\n   2. No\n\n" +
+				" Esc to cancel\n",
+			"Do you want to create permprobe-xyz.txt?",
+		},
+		{
+			"choose-an-option",
+			"Choose an option:\n❯ 1. Keep it\n  2. Drop it\n",
+			"Choose an option:",
+		},
+		{
+			"mcp-elicitation",
+			"───\n MCP server \"notion\" requests your input\n ❯ Accept\n   Decline\n Esc to cancel\n",
+			"MCP server \"notion\" requests your input",
+		},
+	} {
+		if got := extractPromptText(c.body); got != c.want {
+			t.Errorf("%s: extractPromptText = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

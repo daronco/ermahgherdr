@@ -162,7 +162,13 @@ row.
 
 ## Running `erma serve`
 
-`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. It is read-only: it shows the session list (JSON + SSE) and never writes tmux options or `flags.json`.
+`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. It is read-only against tmux state: it shows the session list (JSON + SSE) and never writes tmux options or `flags.json`.
+
+### Conversation view
+
+Tapping a session on the PWA opens its conversation view: the live transcript streamed over SSE, a reply box, the quick-key row (`Esc`, `↵`, `1/2/3`, `^C`) and — whenever the session's state is urgent — a prominent permission banner carrying the actual question Claude Code is asking on screen, parsed server-side from the same pane the bar reads. You can type a reply (Enter sends, Shift+Enter inserts a newline), tap a quick key, or dictate on Chrome's built-in Speech Recognition — no server-side STT. All actions go back to tmux through `send-keys` / `load-buffer` with the user text travelling only on stdin, never on argv.
+
+The hard limits are the same as the session list: **loopback-only** bind (`--insecure-non-loopback` is required to override), **Tailscale identity** on every request (static assets, API, SSE), **no public port** (`tailscale funnel` is refused on purpose). Writes to tmux (reply text, quick keys, read-ack) go through two gates — an Origin match against the request's own Host, and a per-session CSRF token minted on the conversation GET — on top of the identity header.
 
 Flags:
 

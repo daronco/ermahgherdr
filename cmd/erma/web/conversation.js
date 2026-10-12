@@ -124,6 +124,13 @@
   function applyState(row) {
     if (!row) return;
     lastKnownState = row.state || '';
+    // row.prompt is set only when a dialog is up; keep the last known value when
+    // the server omits it mid-stream, so the banner does not blank between ticks.
+    if (typeof row.prompt === 'string' && row.prompt) {
+      latestScreenPrompt = row.prompt;
+    } else if (row.state !== 'urgent') {
+      latestScreenPrompt = '';
+    }
     document.body.classList.remove('state-idle', 'state-done', 'state-proc', 'state-urgent');
     if (row.state) document.body.classList.add('state-' + row.state);
     titleEl.textContent = row.name || row.pane || SID;
@@ -136,11 +143,10 @@
     renderPermBanner();
   }
 
-  // The permission banner shows whenever the row is `urgent`. The exact text
-  // of the question is parsed on the server from the pane's Screen — for #7
-  // we don't have a text channel for that yet, so the banner shows a generic
-  // "respond with 1/2/3 or Esc" with the keys ready, matching the spec's
-  // "prominent" requirement. #8 will carry the parsed Screen text.
+  // The permission banner shows whenever the row is `urgent`. The server parses
+  // the pane's Screen and sends the question text as `row.prompt`; if that is
+  // missing (older server, or the Screen hasn't been read yet), fall back to a
+  // generic nudge so the keys are still prominent.
   function renderPermBanner() {
     if (lastKnownState === 'urgent') {
       permEl.hidden = false;
