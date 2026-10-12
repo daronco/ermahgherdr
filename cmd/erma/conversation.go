@@ -56,9 +56,6 @@ func defaultTmux(stdin io.Reader, argv ...string) error {
 //   - tmux: the runner above. A test replaces it with a recording stub.
 //   - mark: the read-ack call. Default is session.MarkRead; a test counts
 //     invocations.
-//   - cursors: cursor the SSE loop advanced to for the last subscriber,
-//     so a reconnect does not resend the whole transcript. (The handler itself
-//     is stateful — this is just a hint for log clarity.)
 type convHub struct {
 	mu           sync.Mutex
 	csrf         map[string]string

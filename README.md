@@ -162,7 +162,7 @@ row.
 
 ## Running `erma serve`
 
-`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. It is read-only against tmux state: it shows the session list (JSON + SSE) and never writes tmux options or `flags.json`.
+`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. The session list is read-only; the conversation view writes to tmux only what you ask for — reply text and quick keys into the pane, and the read mark when you open it. It never writes `flags.json`.
 
 ### Conversation view
 

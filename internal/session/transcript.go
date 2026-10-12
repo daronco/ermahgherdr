@@ -5,9 +5,8 @@
 //
 // Confinement: the sid is NEVER a path. Every call resolves the file through
 // a glob under the Claude Code projects root, and the match is checked to live
-// inside that root. A client-controlled sid with "..", a leading "/" or any
-// other separator cannot escape (os.ReadFile also refuses "..", but the glob
-// alone would quietly miss and 404 — explicit rejection is clearer).
+// inside that root. A sid with "..", a leading "/" or any other separator is
+// refused up front: the glob alone would follow "*/../.." out of the root.
 
 package session
 
