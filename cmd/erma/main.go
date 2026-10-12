@@ -33,7 +33,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,7 +42,54 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/daronco/ermahgherdr/internal/session"
 )
+
+// Re-exports from internal/session so this file can keep its lower-case names
+// across every rendering call site — the shapes and semantics live in the
+// package, these are just aliases.
+type (
+	state    = session.State
+	screen   = session.Screen
+	sess     = session.Session
+	tmuxPoll = session.Poll
+)
+
+const (
+	idle   = session.Idle
+	done   = session.Done
+	proc   = session.Proc
+	urgent = session.Urgent
+)
+
+const (
+	permGrace  = session.PermGrace
+	permMisses = session.PermMisses
+)
+
+// Thin wrappers over the session package: the bar's refresh loop still writes
+// against the small lowercase surface it was built for.
+func statusOf(wait string, sc screen, seen bool) state { return session.StatusOf(wait, sc, seen) }
+func permAlive(sc screen, seen bool, age int64, misses int) bool {
+	return session.PermAlive(sc, seen, age, misses)
+}
+func readScreen(body string) screen { return session.ReadScreen(body) }
+func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
+	return session.Gather(permMiss)
+}
+func arrange(rows []sess, top bool) { session.Arrange(rows, top) }
+func bandOf(fl string) int          { return session.BandOf(fl) }
+func cleanName(title, path string) string {
+	return session.CleanName(title, path)
+}
+func markRead(pane string)        { session.MarkRead(pane) }
+func markUnread(pane string)      { session.MarkUnread(pane) }
+func saveFlag(sid, fl string)     { session.SaveFlag(sid, fl) }
+func setPaneFlag(pane, fl string) { session.SetPaneFlag(pane, fl) }
+
+func tmuxOut(a ...string) string   { return session.TmuxOut(a...) }
+func run(name string, a ...string) { _ = exec.Command(name, a...).Run() }
 
 // immune palette (identical focused/unfocused)
 var (
@@ -140,43 +186,12 @@ var invaderUp = []string{
 // Font Awesome 7 among its fonts (foot: a fallback in its font list), or it
 // draws a box.
 const (
-	badgeLive  = "\uf7c0"
-	badgeWatch = "\uf0b1"
+	badgeLive  = ""
+	badgeWatch = ""
 	// A button: a space, the icon, two spaces. The icon is ~1.7 cells wide and
 	// overflows into the cell after it, so the second space is what centres it.
 	badgeW = 4
 )
-
-type state int
-
-const (
-	idle   state = iota // gray, static ○ — nothing to see (the many)
-	done                // green, ✓ — finished, and you have not looked yet
-	proc                // amber, spinner — processing
-	urgent              // red, ● — needs you
-)
-
-// A "perm" mark is dropped only on repeated evidence. The notification fires as
-// the prompt is drawn and can win the race against the draw, and a single blind
-// read would flip the item green and back — the one direction worth being slow
-// about, since a missed red is a session waiting on you forever.
-const (
-	permGrace  = 2 // seconds of unconditional belief in a fresh mark
-	permMisses = 2 // consecutive reads with no prompt before it is dropped
-)
-
-type sess struct {
-	pane, sessWin, name string
-	mark                string // the pane option, verbatim — "unread" resists auto-read
-	sid                 string // the Claude session id, "" until its registry file is found
-	flag                string // your mark on it: "" · "paused" · "prio"
-	st                  state
-	since               int64
-	ctx                 string // @erma_ctx_used: % of the room to auto-compact already spent
-	sub                 int    // subagents running under it (@erma_sub)
-	dai                 bool   // the Dai session dai-live keeps (pane option @dai_live)
-	s, w, p             int
-}
 
 type model struct {
 	rows     []sess
@@ -255,11 +270,11 @@ func (m model) itemLines(it sess, idx int, th theme) string {
 	}
 	g, gc := m.glyphRune(it, th)
 	k := itemKey{
-		pane: it.pane, name: it.name, glyph: g, glyphCol: gc,
-		meta: metaLine(it), age: fmtAge(it.since), ctx: it.ctx, flag: it.flag, st: it.st,
-		win: it.w, rowW: m.rowW(), nameW: m.nameW(),
-		sel: idx == m.sel, cur: it.pane == m.current, comp: m.comp,
-		hov: it.pane == m.hover && idx != m.sel, dai: it.dai,
+		pane: it.Pane, name: it.Name, glyph: g, glyphCol: gc,
+		meta: metaLine(it), age: fmtAge(it.Since), ctx: it.Ctx, flag: it.Flag, st: it.St,
+		win: it.W, rowW: m.rowW(), nameW: m.nameW(),
+		sel: idx == m.sel, cur: it.Pane == m.current, comp: m.comp,
+		hov: it.Pane == m.hover && idx != m.sel, dai: it.Dai,
 	}
 	if s, ok := m.icache[k]; ok {
 		return s
@@ -319,455 +334,7 @@ func dataCmd(hidden bool) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return dataMsg(t) })
 }
 
-// ---------- tmux / sway glue ----------
-
-func tmuxOut(a ...string) string   { out, _ := exec.Command("tmux", a...).Output(); return string(out) }
-func run(name string, a ...string) { _ = exec.Command(name, a...).Run() }
-
-// screen: what a pane is showing right now. The hooks say what happened; only
-// the screen says what is happening — the terminal title used to stand in for
-// this and cannot: Claude Code writes it once per turn and leaves it there, so
-// a working pane and a finished one carry the same glyph.
-type screen struct {
-	busy   bool // the status line is ticking, or it waits on background agents
-	prompt bool // a choice may be up: enough to keep a hook's "perm" alive
-	form   bool // a dialog is certainly up: enough to raise red with no hook
-	viewer bool // the transcript viewer covers the session: the screen says nothing
-}
-
-// busyLine matches Claude Code's ticking status line — "✢ Reticulating… (15m
-// 52s · ↓ 45.1k tokens)". The elapsed counter is the part that only exists
-// while it works, and it survives the verb list and the glyph set changing.
-var busyLine = regexp.MustCompile(`…\s*\(\d+[smh]`)
-
-// bgWait: the turn ended but the agents it started are still running, and
-// Claude resumes on its own when they finish — nothing for you to do yet. The
-// line outlives the wait in the transcript, so only the newest status line counts.
-var bgWait = regexp.MustCompile(`Waiting for [1-9]\d* background agents? to finish`)
-
-// lastStatus: the newest status line in live — the first one, going up from the
-// input box, that opens with one of Claude's spinner glyphs.
-func lastStatus(live []string) string {
-	for _, ln := range live {
-		if r := []rune(strings.TrimSpace(ln)); len(r) > 0 && strings.ContainsRune("*·✢✳✶✻✽", r[0]) {
-			return ln
-		}
-	}
-	return ""
-}
-
-// liveLines: how far above the input box the status line can sit. The task list
-// Claude draws between the two runs to six lines.
-const liveLines = 12
-
-// regions splits a pane at its dividers. live is what sits just above the input
-// box (status line, task list); foot is what follows the last divider (a dialog,
-// or the footer). Only these two can be live — everything above is transcript,
-// and an answer that quotes "Do you want to" must not read as a prompt.
-func regions(lines []string) (live, foot []string) {
-	var rules []int
-	for i, ln := range lines {
-		if strings.HasPrefix(strings.TrimSpace(ln), "──") {
-			rules = append(rules, i)
-		}
-	}
-	top, foot := len(lines), lines
-	switch n := len(rules); {
-	case n >= 2:
-		top, foot = rules[n-2], lines[rules[n-1]+1:]
-	case n == 1:
-		top, foot = rules[0], lines[rules[0]+1:]
-	}
-	for i := top - 1; i >= 0 && len(live) < liveLines; i-- {
-		if strings.TrimSpace(lines[i]) != "" {
-			live = append(live, lines[i])
-		}
-	}
-	return live, foot
-}
-
-// optLine matches one entry of a choice list — "❯ 1. Yes", "  2. No" — after the
-// box border is trimmed off. One alone is not a prompt: the input box is also a
-// ❯ and you may well have typed "2. and check the other one" into it.
-var optLine = regexp.MustCompile(`^(❯\s+)?[1-9]\.\s`)
-
-// capSep marks a block boundary in the batched capture. Printable on purpose:
-// display-message escapes control bytes into their \ooo spelling.
-const capSep = "~~erma-block~~"
-
-// tmuxPoll is one round-trip's worth of tmux: what every pane is showing, which
-// clients are attached, and the shared sound flag.
-type tmuxPoll struct {
-	screens map[string]screen
-	clients []int  // client pids, for the focus rule
-	current string // the pane the first attached client is showing
-	win     string // and its window, as session:index
-	sound   bool
-	live    string // @dai_live_state, set by dai-live; "" without it
-}
-
-// pollPanes reads every pane in ONE tmux round-trip: a `display-message` marks
-// where each block starts, the `capture-pane` after it carries the content.
-// Per-pane calls cost ~5ms each, which at two polls a second is real CPU for a
-// bar that is always open; batched, a poll stays two forks however many
-// sessions are up.
-//
-// The client list and the sound flag ride the same round-trip, and go FIRST:
-// tmux stops a command list at its first error, so a pane that dies mid-poll
-// truncates the tail. Losing pane blocks is already tolerated; losing the client
-// list would move the focus rule out from under the bar.
-//
-// Blocks come back in the order asked — the marker cannot carry the pane id,
-// because display-message runs its output through strftime and would eat the
-// leading %. Panes that come back empty, or not at all, are left out of the map
-// and keep whatever their mark says. Downgrading a state on missing evidence is
-// exactly the bug this file is fixing.
-func pollPanes(panes []string) tmuxPoll {
-	args := []string{
-		"display-message", "-p", capSep, ";",
-		"list-clients", "-F", "#{client_pid}\t#{pane_id}\t#{session_name}:#{window_index}", ";",
-		"display-message", "-p", capSep, ";",
-		"show", "-gv", "@erma_sound", ";",
-		"display-message", "-p", capSep, ";",
-		// -q: unset without dai-live, and an error would end the list here.
-		"show", "-gqv", "@dai_live_state",
-	}
-	for _, p := range panes {
-		args = append(args, ";", "display-message", "-p", "-t", p, capSep,
-			";", "capture-pane", "-p", "-t", p)
-	}
-	blocks := strings.Split(tmuxOut(args...), capSep+"\n")
-	var poll tmuxPoll
-	if len(blocks) < 4 {
-		return poll // tmux gave us nothing usable
-	}
-	for _, ln := range strings.Split(blocks[1], "\n") {
-		f := strings.Split(strings.TrimSpace(ln), "\t")
-		if len(f) != 3 || f[0] == "" {
-			continue
-		}
-		poll.clients = append(poll.clients, atoi(f[0]))
-		if poll.current == "" {
-			poll.current, poll.win = f[1], f[2]
-		}
-	}
-	poll.sound = strings.TrimSpace(blocks[2]) == "on"
-	poll.live = strings.TrimSpace(blocks[3])
-	if len(blocks) > len(panes)+4 {
-		return poll // a pane is showing our marker: bail rather than misalign
-	}
-	poll.screens = map[string]screen{}
-	for i, blk := range blocks[4:] {
-		if i < len(panes) && strings.TrimSpace(blk) != "" {
-			if sc := readScreen(blk); !sc.viewer {
-				poll.screens[panes[i]] = sc
-			}
-		}
-	}
-	return poll
-}
-
-// readScreen: is this pane working, and is a prompt up? Claude Code redraws the
-// visible screen every turn — a finished tool call replaces its own prompt box,
-// and the ticking status line replaces itself with a "Churned for 15s" summary —
-// so a marker still on screen means it is still live.
-func readScreen(body string) screen {
-	var sc screen
-	live, foot := regions(strings.Split(body, "\n"))
-	for _, ln := range live {
-		sc.busy = sc.busy || busyLine.MatchString(ln)
-	}
-	sc.busy = sc.busy || bgWait.MatchString(lastStatus(live))
-	opts, cursored, esc, ask := 0, false, false, false
-	for _, ln := range foot {
-		l := strings.ToLower(ln)
-		sc.viewer = sc.viewer || strings.Contains(l, "showing detailed transcript")
-		// "Esc to cancel" is the footer every dialog carries; the second half tells
-		// a dialog waiting on you from a menu you opened yourself. The question is
-		// phrased per tool ("Do you want to create X?"), so only its opening counts.
-		esc = esc || strings.Contains(l, "esc to cancel")
-		ask = ask || strings.Contains(l, "do you want to ") ||
-			strings.Contains(l, "enter to select") || strings.Contains(l, "enter to confirm") ||
-			strings.Contains(l, "requests your input") || strings.Contains(l, "run a dynamic workflow?")
-		sc.prompt = sc.prompt || strings.Contains(l, "choose an option:")
-		if m := optLine.FindStringSubmatch(strings.TrimLeft(ln, " │")); m != nil {
-			opts++
-			cursored = cursored || m[1] != ""
-		}
-	}
-	sc.form = esc && ask
-	// A list you are choosing from: several entries, one of them under the
-	// cursor. A numbered list Claude merely wrote out has no cursor.
-	sc.prompt = sc.prompt || esc || ask || (cursored && opts > 1)
-	return sc
-}
-
-// statusOf folds the pane mark (what the hooks last saw), the screen and the
-// mark's age. seen is false when the pane could not be read.
-//
-// A mark is set by one hook and cleared by another, so a turn that ends without
-// a Stop hook — you esc out of a prompt, you decline a question — used to strand
-// the item on red or amber for good. The screen is what breaks that.
-//
-// Anything that stopped and has not been looked at is `done`, not idle: "waiting"
-// means read, and only the bar writes it, when you look. "unread" is the same
-// green, put there by hand — see markUnread.
-//
-// A dialog on screen wins over everything: not every one of them sends the
-// permission notification, and a spinner left over from the turn is not work.
-func statusOf(wait string, sc screen, seen bool) state {
-	switch {
-	case sc.form:
-		return urgent
-	case sc.busy:
-		return proc
-	case wait == "perm":
-		return urgent // gather has already dropped the marks it disbelieves
-	case wait == "working" && !seen:
-		return proc
-	case wait == "working", wait == "done", wait == "unread":
-		return done
-	}
-	return idle
-}
-
-// permAlive: is a "perm" mark still worth believing? misses counts the
-// consecutive polls that read the pane and found no prompt on it.
-func permAlive(sc screen, seen bool, age int64, misses int) bool {
-	if !seen || sc.prompt {
-		return true
-	}
-	return age <= permGrace || misses < permMisses
-}
-
-// markRead clears the unread green. It goes to the pane option so it outlives a
-// restart of the bar and so the hook sees it on its next transition.
-func markRead(pane string) {
-	run("tmux", "set", "-p", "-t", pane, "@erma_wait", "waiting")
-}
-
-// markUnread puts the green back by hand — you read it, and you want it to keep
-// asking. It is a mark of its own rather than a plain "done" because the pane
-// you are staring at while you press u would be auto-read again on the next
-// poll; only a deliberate jump (or the session doing something new) clears it.
-func markUnread(pane string) {
-	run("tmux", "set", "-p", "-t", pane, "@erma_wait", "unread")
-}
-
-// ---------- marks: paused / priority ----------
-
-// flagsPath: the marks you set by hand, keyed by Claude session id. A file and
-// not a pane option, so a mark survives tmux restarting and follows the session
-// into another pane. erma-hook drops "paused" from it when you prompt the session.
-func flagsPath() string {
-	dir := os.Getenv("XDG_STATE_HOME")
-	if dir == "" {
-		dir = filepath.Join(os.Getenv("HOME"), ".local", "state")
-	}
-	return filepath.Join(dir, "erma", "flags.json")
-}
-
-type flagRec struct {
-	Flag  string `json:"flag"`
-	Since int64  `json:"since"`
-}
-
-func loadFlags() map[string]flagRec {
-	m := map[string]flagRec{}
-	if b, err := os.ReadFile(flagsPath()); err == nil {
-		_ = json.Unmarshal(b, &m)
-	}
-	return m
-}
-
-// saveFlag sets one session's mark, "" clearing it. erma-hook takes the same
-// lock to unpause, and the rename means no reader ever sees half a file.
-func saveFlag(sid, fl string) {
-	p := flagsPath()
-	if os.MkdirAll(filepath.Dir(p), 0o755) != nil {
-		return
-	}
-	lk, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return
-	}
-	defer lk.Close()
-	_ = syscall.Flock(int(lk.Fd()), syscall.LOCK_EX)
-	m := loadFlags()
-	if fl == "" {
-		delete(m, sid)
-	} else {
-		m[sid] = flagRec{fl, time.Now().Unix()}
-	}
-	b, _ := json.MarshalIndent(m, "", "  ")
-	if tmp := p + ".tmp"; os.WriteFile(tmp, append(b, '\n'), 0o644) == nil {
-		_ = os.Rename(tmp, p)
-	}
-}
-
-// setPaneFlag mirrors a mark onto the pane as @erma_flag: the tmux tab and
-// erma-hook's sound rules read it there, without parsing the file.
-func setPaneFlag(pane, fl string) {
-	if fl == "" {
-		run("tmux", "set", "-p", "-u", "-t", pane, "@erma_flag")
-	} else {
-		run("tmux", "set", "-p", "-t", pane, "@erma_flag", fl)
-	}
-	run("tmux", "refresh-client", "-S")
-}
-
-// paneSessions maps tmux pane -> Claude session id, from the registry Claude
-// Code keeps as one file per running process. A claude that crashed leaves its
-// file behind, so a file whose process is gone does not count.
-func paneSessions() map[string]string {
-	dir := os.Getenv("CLAUDE_CONFIG_DIR")
-	if dir == "" {
-		dir = filepath.Join(os.Getenv("HOME"), ".claude")
-	}
-	files, _ := filepath.Glob(filepath.Join(dir, "sessions", "*.json"))
-	out := map[string]string{}
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		var r struct {
-			Pid       int    `json:"pid"`
-			SessionID string `json:"sessionId"`
-			Tmux      string `json:"tmux"` // "0:@8.%16" — session:window.pane
-		}
-		if json.Unmarshal(b, &r) != nil || r.SessionID == "" {
-			continue
-		}
-		i := strings.LastIndexByte(r.Tmux, '.')
-		if i < 0 || syscall.Kill(r.Pid, 0) == syscall.ESRCH {
-			continue
-		}
-		out[r.Tmux[i+1:]] = r.SessionID
-	}
-	return out
-}
-
-// bandOf: which stretch of the list a mark puts a row in, counted from the far
-// end. The unmarked rows sit there, with no heading and first to scroll off;
-// then priority; then the paused, folded to a line each, against the counters.
-func bandOf(fl string) int {
-	switch fl {
-	case "prio":
-		return 1
-	case "paused":
-		return 2
-	}
-	return 0
-}
-
-// arrange orders rows by band and keeps tmux order inside each. The far end is
-// the top of the screen bottom-up, and the bottom with --top. The Dai session
-// comes before every band: the first row is the top of the list in both layouts.
-func arrange(rows []sess, top bool) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].dai != rows[j].dai {
-			return rows[i].dai
-		}
-		a, b := bandOf(rows[i].flag), bandOf(rows[j].flag)
-		if top {
-			return a > b
-		}
-		return a < b
-	})
-}
-
-func cleanName(title, path string) string {
-	t := strings.TrimSpace(title)
-	for len(t) > 0 {
-		r, sz := utf8.DecodeRuneInString(t)
-		if (r >= 'A' && r <= 'z') || r == '(' || r == '~' || (r >= '0' && r <= '9') {
-			break
-		}
-		t = t[sz:]
-	}
-	t = strings.TrimSpace(strings.TrimPrefix(t, "=> "))
-	if t == "" || strings.HasPrefix(t, "/") || strings.Contains(t, "/mnt/") {
-		return filepath.Base(strings.TrimRight(path, "/"))
-	}
-	return t
-}
-
-func atoi(s string) int     { n, _ := strconv.Atoi(s); return n }
-func atoi64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
-
-func gather(permMiss map[string]int) ([]sess, tmuxPoll) {
-	f := strings.Join([]string{
-		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
-		"#{@erma_wait}", "#{@erma_wait_since}", "#{pane_current_path}", "#{pane_title}",
-		"#{@ctx_label}", "#{@erma_ctx_used}", "#{@erma_sub}", "#{@erma_flag}", "#{@dai_live}",
-	}, "\t")
-	out := tmuxOut("list-panes", "-a", "-f", "#{==:#{pane_current_command},claude}", "-F", f)
-	var recs [][]string
-	var panes []string
-	for _, line := range strings.Split(out, "\n") {
-		c := strings.Split(line, "\t")
-		if len(c) < 13 || c[0] == "" {
-			continue
-		}
-		recs, panes = append(recs, c), append(panes, c[0])
-	}
-	poll := pollPanes(panes)
-	screens := poll.screens
-	flags, sids := loadFlags(), paneSessions()
-	now := time.Now().Unix()
-	var rows []sess
-	for _, c := range recs {
-		wait, since := c[4], atoi64(c[5])
-		sc, seen := screens[c[0]]
-		if wait == "perm" && seen && !sc.prompt {
-			permMiss[c[0]]++ // only a read that found no prompt counts against it
-		} else {
-			delete(permMiss, c[0])
-		}
-		if wait == "perm" && !permAlive(sc, seen, now-since, permMiss[c[0]]) {
-			wait = "done"
-		}
-		st := statusOf(wait, sc, seen)
-		// Write the conclusion back, so the hook's next transition compares
-		// against the state we are actually showing — and does not ping for a
-		// "finished" it thinks is new.
-		if seen && st == done && c[4] != "done" && c[4] != "unread" {
-			run("tmux", "set", "-p", "-t", c[0], "@erma_wait", "done")
-		}
-		// @ctx_label, when something outside sets it, is the same short label the
-		// tmux tab shows — the bar and the tab should not disagree about a session.
-		name := strings.TrimSpace(c[8])
-		if name == "" {
-			name = cleanName(c[7], c[6])
-		}
-		sid := sids[c[0]]
-		fl := ""
-		if sid != "" {
-			fl = flags[sid].Flag
-		}
-		if fl != c[11] { // erma-hook unpaused it, or the pane is new to the mark
-			setPaneFlag(c[0], fl)
-		}
-		rows = append(rows, sess{
-			pane: c[0], sessWin: c[1] + ":" + c[2], name: name, sid: sid, flag: fl,
-			mark: wait, st: st, since: since, ctx: strings.TrimSpace(c[9]), sub: len(strings.Fields(c[10])),
-			dai: c[12] != "", // dai-live marks it with its data directory
-			s:   atoi(c[1]), w: atoi(c[2]), p: atoi(c[3]),
-		})
-	}
-	sort.Slice(rows, func(i, j int) bool { // stable by loc — never reorders under the cursor
-		a, b := rows[i], rows[j]
-		if a.s != b.s {
-			return a.s < b.s
-		}
-		if a.w != b.w {
-			return a.w < b.w
-		}
-		return a.p < b.p
-	})
-	return rows, poll
-}
+// ---------- sway glue ----------
 
 func switchView(s sess) {
 	own := ""
@@ -777,11 +344,11 @@ func switchView(s sess) {
 	for _, c := range strings.Split(tmuxOut("list-clients", "-F", "#{client_name}"), "\n") {
 		c = strings.TrimSpace(c)
 		if c != "" && c != own {
-			run("tmux", "switch-client", "-c", c, "-t", s.sessWin)
+			run("tmux", "switch-client", "-c", c, "-t", s.SessWin)
 		}
 	}
-	run("tmux", "select-window", "-t", s.sessWin)
-	run("tmux", "select-pane", "-t", s.pane)
+	run("tmux", "select-window", "-t", s.SessWin)
+	run("tmux", "select-pane", "-t", s.Pane)
 }
 
 func swayFocusMain() {
@@ -1083,10 +650,14 @@ func ppidOf(pid int) int {
 		return 0
 	}
 	if f := strings.Fields(string(b)[i+1:]); len(f) >= 2 {
-		return atoi(f[1])
+		return atoiLocal(f[1])
 	}
 	return 0
 }
+
+// atoiLocal: a tiny helper that mirrors the one in internal/session; keeping a
+// local copy avoids re-exporting it just for ppidOf.
+func atoiLocal(s string) int { n, _ := strconv.Atoi(s); return n }
 
 // ---------- text helpers ----------
 
@@ -1196,7 +767,7 @@ func (m model) moving() bool {
 		}
 	}
 	for _, r := range m.rows {
-		if r.st == proc {
+		if r.St == proc {
 			return true
 		}
 	}
@@ -1220,20 +791,20 @@ func (m *model) refresh() {
 	var poll tmuxPoll
 	m.rows, poll = gather(m.permMiss)
 	arrange(m.rows, m.top)
-	m.focused, m.termFoc = detectFocus(m.sway, poll.clients)
-	m.current = currentPane(m.rows, poll.current, poll.win)
-	m.sound = poll.sound
-	m.live = poll.live
+	m.focused, m.termFoc = detectFocus(m.sway, poll.Clients)
+	m.current = currentPane(m.rows, poll.Current, poll.Win)
+	m.sound = poll.Sound
+	m.live = poll.Live
 	m.watch = watchState()
 	m.hidden = m.sway.isHidden()
 	// Looking at the pane is what clears the unread green: the terminal holds
 	// the keyboard and tmux is showing that pane, so the answer is on screen.
 	if m.termFoc && m.current != "" {
 		for i := range m.rows {
-			if m.rows[i].pane == m.current && m.rows[i].st == done &&
-				m.rows[i].mark != "unread" {
-				markRead(m.rows[i].pane)
-				m.rows[i].st = idle
+			if m.rows[i].Pane == m.current && m.rows[i].St == done &&
+				m.rows[i].Mark != "unread" {
+				markRead(m.rows[i].Pane)
+				m.rows[i].St = idle
 			}
 		}
 	}
@@ -1245,11 +816,11 @@ func (m *model) refresh() {
 	}
 	live := map[string]bool{}
 	for _, r := range m.rows {
-		live[r.pane] = true
-		if r.st == urgent && !m.wasUrg[r.pane] {
-			m.pulse[r.pane] = 14
+		live[r.Pane] = true
+		if r.St == urgent && !m.wasUrg[r.Pane] {
+			m.pulse[r.Pane] = 14
 		}
-		m.wasUrg[r.pane] = r.st == urgent
+		m.wasUrg[r.Pane] = r.St == urgent
 	}
 	for p := range m.wasUrg {
 		if !live[p] {
@@ -1280,7 +851,7 @@ func (m *model) refresh() {
 	// moves the cursor too — coming back to the bar it never "jumps" to a stale item.
 	if m.current != "" && m.menu == nil {
 		for i, r := range m.rows {
-			if r.pane == m.current {
+			if r.Pane == m.current {
 				m.sel = i
 				break
 			}
@@ -1294,13 +865,13 @@ func (m *model) refresh() {
 // so a window with claude in it counts as showing that claude.
 func currentPane(rows []sess, pane, win string) string {
 	for _, r := range rows {
-		if r.pane == pane {
+		if r.Pane == pane {
 			return pane
 		}
 	}
 	for _, r := range rows {
-		if r.sessWin == win {
-			return r.pane
+		if r.SessWin == win {
+			return r.Pane
 		}
 	}
 	return pane
@@ -1367,7 +938,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Passing the right edge is the pointer on its way out of the bar.
 			m.hover = ""
 			if idx := m.hitTest(msg.Y); idx >= 0 && msg.X < m.rowW()-1 {
-				m.hover = m.rows[idx].pane
+				m.hover = m.rows[idx].Pane
 			}
 			return m, nil
 		}
@@ -1399,7 +970,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if idx := m.hitTest(msg.Y); idx >= 0 {
 				m.sel = idx
 				m.hover = ""
-				m.menu = &menu{pane: m.rows[idx].pane, at: -1, held: m.focused}
+				m.menu = &menu{pane: m.rows[idx].Pane, at: -1, held: m.focused}
 			}
 		case tea.MouseButtonMiddle:
 			if idx := m.hitTest(msg.Y); idx >= 0 {
@@ -1465,7 +1036,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s[4] >= '0' && s[4] <= '9' {
 				n := int(s[4] - '0')
 				for idx, it := range m.rows {
-					if it.w == n {
+					if it.W == n {
 						m.sel = idx
 						m.jump()
 						break
@@ -1480,18 +1051,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // unread: put the green back on the selected session.
 func (m *model) unread() {
 	if s, ok := m.cur(); ok {
-		markUnread(s.pane)
-		m.rows[m.sel].mark, m.rows[m.sel].st = "unread", done
+		markUnread(s.Pane)
+		m.rows[m.sel].Mark, m.rows[m.sel].St = "unread", done
 	}
 }
 
 // read clears the green on the selected session without jumping to it.
 func (m *model) read() {
 	if s, ok := m.cur(); ok {
-		markRead(s.pane)
-		m.rows[m.sel].mark = "waiting"
-		if s.st == done {
-			m.rows[m.sel].st = idle
+		markRead(s.Pane)
+		m.rows[m.sel].Mark = "waiting"
+		if s.St == done {
+			m.rows[m.sel].St = idle
 		}
 	}
 }
@@ -1499,7 +1070,7 @@ func (m *model) read() {
 // toggleRead flips the selected session between read and unread: the middle
 // click, and the menu's first entry.
 func (m *model) toggleRead() {
-	if s, ok := m.cur(); ok && s.st == done {
+	if s, ok := m.cur(); ok && s.St == done {
 		m.read()
 	} else {
 		m.unread()
@@ -1515,15 +1086,15 @@ func (m model) menuOpts() []menuOpt {
 	}
 	s := m.rows[i]
 	opts := []menuOpt{{"✓", cDone, "unread", (*model).toggleRead}}
-	if s.st == done {
+	if s.St == done {
 		opts[0].icon, opts[0].col, opts[0].label = "○", badgeIdle, "read"
 	}
 	pause := menuOpt{"‖", metaSel, "pause", func(m *model) { m.toggleFlag("paused") }}
-	if s.flag == "paused" {
+	if s.Flag == "paused" {
 		pause.label = "resume"
 	}
 	prio := menuOpt{"★", themeFor(false).white, "prio", func(m *model) { m.toggleFlag("prio") }}
-	if s.flag == "prio" {
+	if s.Flag == "prio" {
 		prio.label = "drop prio"
 	}
 	return append(opts, pause, prio)
@@ -1535,7 +1106,7 @@ func (m model) menuIdx() int {
 		return -1
 	}
 	for i, r := range m.rows {
-		if r.pane == m.menu.pane {
+		if r.Pane == m.menu.pane {
 			return i
 		}
 	}
@@ -1557,18 +1128,18 @@ func (m *model) pick(k int) {
 // mark at a time: pausing a priority session drops its priority.
 func (m *model) toggleFlag(fl string) {
 	s, ok := m.cur()
-	if !ok || s.sid == "" {
+	if !ok || s.Sid == "" {
 		return // no registry file for it yet: nothing to key the mark by
 	}
-	if s.flag == fl {
+	if s.Flag == fl {
 		fl = ""
 	}
-	saveFlag(s.sid, fl)
-	setPaneFlag(s.pane, fl)
-	m.rows[m.sel].flag = fl
+	saveFlag(s.Sid, fl)
+	setPaneFlag(s.Pane, fl)
+	m.rows[m.sel].Flag = fl
 	arrange(m.rows, m.top)
 	for i, r := range m.rows { // the row moved band; the cursor goes with it
-		if r.pane == s.pane {
+		if r.Pane == s.Pane {
 			m.sel = i
 			break
 		}
@@ -1580,10 +1151,10 @@ func (m *model) jump() {
 	if s, ok := m.cur(); ok {
 		switchView(s)
 		swayFocusMain()
-		m.current = s.pane
-		markRead(s.pane) // jumping is reading — don't wait for the next poll
-		if m.rows[m.sel].st == done {
-			m.rows[m.sel].st = idle
+		m.current = s.Pane
+		markRead(s.Pane) // jumping is reading — don't wait for the next poll
+		if m.rows[m.sel].St == done {
+			m.rows[m.sel].St = idle
 		}
 	}
 }
@@ -1606,7 +1177,7 @@ func (m model) nameW() int {
 // markW: the name cells a priority row's ★ takes, with its space. The Dai's
 // icon needs none: it is drawn where the status bullet goes.
 func markW(it sess) int {
-	if it.flag == "prio" && !it.dai {
+	if it.Flag == "prio" && !it.Dai {
 		return 2
 	}
 	return 0
@@ -1615,14 +1186,14 @@ func markW(it sess) int {
 // nameLines: the name column, less what the row's mark takes.
 func (m model) nameLines(it sess) []string {
 	nw := m.nameW() - markW(it)
-	disp := midTruncate(strings.ToLower(it.name), nw*2)
+	disp := midTruncate(strings.ToLower(it.Name), nw*2)
 	return wrapN(disp, nw, 2)
 }
 
 // hasMeta: does this item have a bottom (time/PERM) line? Urgent always does;
 // others only when there's a recorded age — no empty line eating space.
 func (m model) itemHeight(it sess, comp bool) int {
-	if comp || it.flag == "paused" {
+	if comp || it.Flag == "paused" {
 		return 1
 	}
 	// names + the second line (tmux window number + time) + top & bottom pad
@@ -1637,15 +1208,15 @@ func (m model) itemHeight(it sess, comp bool) int {
 // list at all: it is drawn on the top rows of the panel, between two rules,
 // where the list growing from the bottom never reaches it.
 func (m model) pinned() bool {
-	return !m.top && len(m.rows) > 0 && m.rows[0].dai
+	return !m.top && len(m.rows) > 0 && m.rows[0].Dai
 }
 
 // mascotLit: with a Dai session up, the mascot is the Dai -- lit while its pane
 // is the one in front of you. Without one, the bar's own focus lights it.
 func (m model) mascotLit() bool {
 	for _, r := range m.rows {
-		if r.dai {
-			return m.termFoc && m.current == r.pane
+		if r.Dai {
+			return m.termFoc && m.current == r.Pane
 		}
 	}
 	return m.focused
@@ -1812,7 +1383,7 @@ func (m model) listTop() int {
 // one band ends and the next begins, and a heading over each marked band.
 func (m model) lead(i int) (gap, head bool) {
 	it := m.rows[i]
-	if it.dai { // its own band of one, under its own rules
+	if it.Dai { // its own band of one, under its own rules
 		return false, false
 	}
 	first := i == m.listStart() // the pinned block has its own rule above the list
@@ -1820,8 +1391,8 @@ func (m model) lead(i int) (gap, head bool) {
 	if i > 0 {
 		prev = m.rows[i-1]
 	}
-	gap = !first && (prev.dai || bandOf(prev.flag) != bandOf(it.flag))
-	head = it.flag != "" && (first || prev.dai || prev.flag != it.flag)
+	gap = !first && (prev.Dai || bandOf(prev.Flag) != bandOf(it.Flag))
+	head = it.Flag != "" && (first || prev.Dai || prev.Flag != it.Flag)
 	return gap, head
 }
 
@@ -2009,17 +1580,17 @@ func (m model) spineRune(st state) (string, lipgloss.Color) {
 }
 func (m model) glyphRune(it sess, th theme) (string, lipgloss.Color) {
 	g, c := m.stateGlyph(it, th)
-	if it.dai { // the Dai's own icon stands in for the bullet, in the state's colour
+	if it.Dai { // the Dai's own icon stands in for the bullet, in the state's colour
 		return badgeLive, c
 	}
 	return g, c
 }
 
 func (m model) stateGlyph(it sess, th theme) (string, lipgloss.Color) {
-	switch it.st {
+	switch it.St {
 	case urgent:
 		g := "●"
-		if m.pulse[it.pane] > 0 && (m.frame/2)%2 == 0 {
+		if m.pulse[it.Pane] > 0 && (m.frame/2)%2 == 0 {
 			g = "◉"
 		}
 		return g, cUrgent
@@ -2035,11 +1606,11 @@ func (m model) stateGlyph(it sess, th theme) (string, lipgloss.Color) {
 // nameColor: priority speaks in weight, and lifts a quiet name to white — never
 // in a hue of its own, since hue is what the states use.
 func nameColor(it sess, sel bool, th theme) (lipgloss.Color, bool) {
-	prio := it.flag == "prio"
+	prio := it.Flag == "prio"
 	if sel {
-		return th.white, it.st == urgent || prio
+		return th.white, it.St == urgent || prio
 	}
-	switch it.st {
+	switch it.St {
 	case urgent:
 		return lblUrgent, true
 	case done:
@@ -2060,7 +1631,7 @@ func metaColorOf(it sess, sel bool, th theme) lipgloss.Color {
 	if sel {
 		return metaSel
 	}
-	switch it.st {
+	switch it.St {
 	case urgent:
 		return metaUrg
 	case done:
@@ -2076,16 +1647,16 @@ func metaColorOf(it sess, sel bool, th theme) lipgloss.Color {
 // sat. Each part only when there is one.
 func metaLine(it sess) string {
 	var parts []string
-	switch it.st {
+	switch it.St {
 	case urgent:
 		parts = append(parts, "PERM")
 	case done:
 		parts = append(parts, "DONE")
 	}
-	if it.sub > 0 {
-		parts = append(parts, "⤷"+strconv.Itoa(it.sub))
+	if it.Sub > 0 {
+		parts = append(parts, "⤷"+strconv.Itoa(it.Sub))
 	}
-	if age := fmtAge(it.since); age != "" {
+	if age := fmtAge(it.Since); age != "" {
 		parts = append(parts, age)
 	}
 	return strings.Join(parts, " · ")
@@ -2106,13 +1677,13 @@ func ctxTag(it sess) string {
 	if used := ctxUsed(it); used < ctxUsedHigh {
 		return ""
 	}
-	return "◔" + it.ctx + "%"
+	return "◔" + it.Ctx + "%"
 }
 
 // ctxUsed: -1 when the pane has published nothing yet.
 func ctxUsed(it sess) int {
-	n, err := strconv.Atoi(it.ctx)
-	if it.ctx == "" || err != nil {
+	n, err := strconv.Atoi(it.Ctx)
+	if it.Ctx == "" || err != nil {
 		return -1
 	}
 	return min(100, max(0, n))
@@ -2155,9 +1726,9 @@ func ctxColor(used int, th theme) lipgloss.Color {
 // is a half-block, the track a thin rule; the quadrant carries the odd half, so
 // the meter still moves at ~3% on a row this wide.
 const (
-	ctxCellFull  = "\u2584"
-	ctxCellHalf  = "\u2596"
-	ctxCellTrack = "\u2581"
+	ctxCellFull  = "▄"
+	ctxCellHalf  = "▖"
+	ctxCellTrack = "▁"
 )
 
 // ctxMeter splits the meter into what is spent and the rail behind it, so the
@@ -2183,18 +1754,18 @@ func ctxMeter(used, cells int) (fill, track string) {
 // down the length of the bar.
 func (m model) ctxShown(it sess) bool {
 	used := ctxUsed(it)
-	return used >= 0 && (used >= ctxUsedAmber || it.pane == m.current)
+	return used >= 0 && (used >= ctxUsedAmber || it.Pane == m.current)
 }
 
 func rowBg(it sess, sel bool, th theme) lipgloss.Color {
 	switch {
-	case it.st == urgent && sel:
+	case it.St == urgent && sel:
 		return bgBoth
-	case it.st == urgent:
+	case it.St == urgent:
 		return bgUrgent
-	case it.st == done && sel:
+	case it.St == done && sel:
 		return bgDoneSel
-	case it.st == done:
+	case it.St == done:
 		return bgDone
 	case sel:
 		return th.bgSel
@@ -2203,14 +1774,14 @@ func rowBg(it sess, sel bool, th theme) lipgloss.Color {
 }
 
 func (m model) renderItem(it sess, idx int, th theme) string {
-	parked := it.flag == "paused"
-	if parked && it.st == done {
-		it.st = idle // a finished answer in a paused session waits quietly for you
+	parked := it.Flag == "paused"
+	if parked && it.St == done {
+		it.St = idle // a finished answer in a paused session waits quietly for you
 	}
 	sel := idx == m.sel
 	nw := m.nameW()
 	rbg := rowBg(it, sel, th)
-	hov := it.pane == m.hover && !sel
+	hov := it.Pane == m.hover && !sel
 	if hov { // the pointer is on it: a click jumps here
 		rbg = ctxShade(rbg, 0x06)
 	}
@@ -2219,7 +1790,7 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 	c := func(f lipgloss.Color, s string, b bool) string {
 		return lipgloss.NewStyle().Foreground(f).Background(rbg).Bold(b).Render(s)
 	}
-	sp, spc := m.spineRune(it.st)
+	sp, spc := m.spineRune(it.St)
 	spine := c(spc, sp, false)
 	band := c(rbg, " ", false)
 	if sel {
@@ -2240,14 +1811,14 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 		// gutter 5 + a space + the 4-cell age + the arrow: 11, not 10. Being one
 		// over made lipgloss wrap the row onto a second line.
 		nwC := max(4, m.rowW()-5-1-4-1) - sw
-		nm := midTruncate(strings.ToLower(it.name), nwC)
-		age, agec := padL(fmtAge(it.since), 4), metaColorOf(it, sel, th)
-		if parked && it.st != urgent {
+		nm := midTruncate(strings.ToLower(it.Name), nwC)
+		age, agec := padL(fmtAge(it.Since), 4), metaColorOf(it, sel, th)
+		if parked && it.St != urgent {
 			nc, bold, agec = cPaused, false, cPausedMt
 			if sel {
 				nc = th.calm
 			}
-			if it.st == idle {
+			if it.St == idle {
 				gg, gc = "‖", cPaused
 			}
 		}
@@ -2255,7 +1826,7 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 			age, agec = padL(tag, 4), cCtx
 		}
 		arrow := c(rbg, " ", false)
-		if it.pane == m.current {
+		if it.Pane == m.current {
 			arrow = c(th.focus, "➤", false)
 		}
 		line := band + spine + c(rbg, " ", false) + c(gc, gg, false) + c(rbg, " ", false) + star +
@@ -2313,9 +1884,9 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 
 	// right column (2 cells): the tmux window # as a dark badge on line 0, and
 	// the current-session arrow ▸ just below it (line 1) when applicable.
-	bstr := " " + strconv.Itoa(it.w) + " " // symmetric 1-space padding inside the badge
+	bstr := " " + strconv.Itoa(it.W) + " " // symmetric 1-space padding inside the badge
 	bw := utf8.RuneCountInString(bstr)
-	bbg := badgeBgFor(it.st)
+	bbg := badgeBgFor(it.St)
 	if sel { // selected = cyan (the "you" color)
 		bbg = th.focus
 	}
@@ -2335,7 +1906,7 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 			ac = badgeCell
 		case i == meterRow:
 			ac = meterTail // the rail carries on, or the number takes over
-		case i == 1 && it.pane == m.current:
+		case i == 1 && it.Pane == m.current:
 			ac = arrowCell
 		default:
 			ac = c(rbg, "     ", false)
@@ -2354,13 +1925,13 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 func (m model) counts() (u, d, p, i, z int) {
 	for _, it := range m.rows {
 		switch {
-		case it.st == urgent:
+		case it.St == urgent:
 			u++
-		case it.flag == "paused":
+		case it.Flag == "paused":
 			z++
-		case it.st == done:
+		case it.St == done:
 			d++
-		case it.st == proc:
+		case it.St == proc:
 			p++
 		default:
 			i++
@@ -2408,7 +1979,7 @@ func (m model) legend() string {
 func (m model) bandHead(fl string, th theme) string {
 	n := 0
 	for _, r := range m.rows {
-		if r.flag == fl {
+		if r.Flag == fl {
 			n++
 		}
 	}
@@ -2549,7 +2120,7 @@ func (m model) View() string {
 				list = append(list, "")
 			}
 			if head {
-				list = append(list, m.bandHead(it.flag, th))
+				list = append(list, m.bandHead(it.Flag, th))
 			}
 			list = append(list, strings.Split(m.itemLines(it, idx, th), "\n")...)
 		}
@@ -2727,6 +2298,16 @@ func panel(th theme, w, h int, body string) string {
 }
 
 func main() {
+	// Subcommand dispatch: `erma serve ...` goes to its own flagset so --addr,
+	// --tailscale-login etc. do not collide with the bar's --top.
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		if err := runServe(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	top := flag.Bool("top", false,
 		"lay the bar out top-down: counters and sessions at the top, mascot at the bottom")
 	flag.Parse()

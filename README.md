@@ -160,6 +160,64 @@ a handful of tmux options and one state file. See
 window `<n>`. `s` toggles the sound, same as clicking the badge in the counter
 row.
 
+## Running `erma serve`
+
+`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. It is read-only: it shows the session list (JSON + SSE) and never writes tmux options or `flags.json`.
+
+Flags:
+
+- `--addr` — the TCP address to listen on. Defaults to `127.0.0.1:0`, picking an ephemeral loopback port. A non-loopback address is **refused** unless you also pass `--insecure-non-loopback`.
+- `--tailscale-login` (or `$ERMA_TAILSCALE_LOGIN`) — the tailnet login this server trusts. Required unless `--dev-skip-auth` is set.
+- `--dev-skip-auth` — the ONLY way to bypass identity checks. Logs a loud warning on start. Do not use with a public listener.
+- `--insecure-non-loopback` — allow binding to a non-loopback address. Dangerous: the port is then open to anyone who can reach it on the LAN.
+
+Auth model, enforced on every request (static assets, API, SSE):
+
+- A missing `Tailscale-User-Login` header gives `401`.
+- A header that does not match the configured login gives `403`.
+- A `Tailscale-Funnel-Request` marker gives `403` even with the right login — Funnel strips identity and would otherwise impersonate the match path.
+
+### systemd `--user` unit
+
+Install the binary with `make install` (it lands in `~/.local/bin/erma`), then drop this at `~/.config/systemd/user/erma-serve.service`, replacing the login with your own tailnet login (`tailscale status --json | jq -r '.User[(.Self.UserID|tostring)].LoginName'` prints it):
+
+```ini
+[Unit]
+Description=erma serve — read-only HTTP view of Claude tmux sessions
+
+[Service]
+Environment=ERMA_TAILSCALE_LOGIN=you@example.com
+ExecStart=%h/.local/bin/erma serve --addr 127.0.0.1:8731
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+Then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now erma-serve.service
+journalctl --user -u erma-serve -f
+```
+
+The service talks to the tmux server on its default socket, so it sees the sessions of a tmux started the usual way by the same user.
+
+### Exposing over Tailscale
+
+The tailnet needs MagicDNS and HTTPS certificates enabled (admin console → DNS). With the server bound to `127.0.0.1:8731`, hand that port to `tailscale serve`:
+
+```sh
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8731
+tailscale serve status
+```
+
+`--bg` keeps the config after the command exits and across reboots; without it the proxy dies with your terminal. To run it without `sudo`, make yourself the operator once: `sudo tailscale set --operator=$USER`.
+
+That gives you `https://<hostname>.<tailnet>.ts.net/` from any device signed in to your tailnet, with Tailscale injecting the identity header the server checks. A `401` there means the header did not arrive; a `403` means the login differs from `ERMA_TAILSCALE_LOGIN`. **Do not** use `tailscale funnel` — the server refuses Funnel-marked requests on purpose, and the loopback bind would block it anyway.
+
 ## Security
 
 Every pull request to `main` (and every push to `main`) runs the following

@@ -19,19 +19,19 @@ func TestStatusOf(t *testing.T) {
 		seen bool
 		want state
 	}{
-		{"permission up", "perm", screen{prompt: true}, true, urgent},
-		{"dialog, no notification", "", screen{prompt: true, form: true}, true, urgent},
-		{"dialog under a stale spinner", "working", screen{busy: true, prompt: true, form: true}, true, urgent},
+		{"permission up", "perm", screen{Prompt: true}, true, urgent},
+		{"dialog, no notification", "", screen{Prompt: true, Form: true}, true, urgent},
+		{"dialog under a stale spinner", "working", screen{Busy: true, Prompt: true, Form: true}, true, urgent},
 		{"perm, pane unread", "perm", screen{}, false, urgent},
-		{"approved, now working", "perm", screen{busy: true}, true, proc},
-		{"working", "working", screen{busy: true}, true, proc},
+		{"approved, now working", "perm", screen{Busy: true}, true, proc},
+		{"working", "working", screen{Busy: true}, true, proc},
 		{"working, stopped without a Stop hook", "working", screen{}, true, done},
 		{"working, pane unread", "working", screen{}, false, proc},
 		{"finished", "done", screen{}, true, done},
-		{"finished, then off again", "done", screen{busy: true}, true, proc},
+		{"finished, then off again", "done", screen{Busy: true}, true, proc},
 		{"read", "waiting", screen{}, true, idle},
 		{"no hook, quiet", "", screen{}, true, idle},
-		{"no hook, working", "", screen{busy: true}, true, proc},
+		{"no hook, working", "", screen{Busy: true}, true, proc},
 	} {
 		if got := statusOf(c.wait, c.sc, c.seen); got != c.want {
 			t.Errorf("%s: statusOf(%q, %+v, %v) = %v, want %v",
@@ -49,7 +49,7 @@ func TestPermAlive(t *testing.T) {
 		misses int
 		want   bool
 	}{
-		{"prompt on screen", screen{prompt: true}, true, 999, 9, true},
+		{"prompt on screen", screen{Prompt: true}, true, 999, 9, true},
 		{"pane could not be read", screen{}, false, 999, 9, true},
 		{"still within the grace", screen{}, true, 1, 1, true},
 		{"first miss", screen{}, true, 999, 1, true},
@@ -69,7 +69,7 @@ func TestReadScreen(t *testing.T) {
 		want screen
 	}{
 		{"working", "● Read(main.go)\n✢ Reticulating… (15m 52s · ↓ 45.1k tokens)\n───\n❯ \n───\n  ⏵⏵ auto mode on\n",
-			screen{busy: true}},
+			screen{Busy: true}},
 		{"stopped", "● all set\n✻ Churned for 15s\n─── a session ──\n❯ \n───\n  ⏵⏵ auto mode on\n",
 			screen{}},
 		// verbatim from Claude Code 2.1.236: the question is phrased per tool,
@@ -78,17 +78,17 @@ func TestReadScreen(t *testing.T) {
 			" Do you want to create permprobe-xyz.txt?\n ❯ 1. Yes\n" +
 			"   2. Yes, and switch to accept edits for this session (shift+tab)\n   3. No\n\n" +
 			" Esc to cancel · Tab to amend\n",
-			screen{prompt: true, form: true}},
-		{"question", "Choose an option:\n❯ 1. Keep it\n  2. Drop it\n", screen{prompt: true}},
+			screen{Prompt: true, Form: true}},
+		{"question", "Choose an option:\n❯ 1. Keep it\n  2. Drop it\n", screen{Prompt: true}},
 		{"typed at the input box", "─── a session ──\n❯ 2. also check the other one\n───\n", screen{}},
 		{"a numbered list Claude wrote", "● Steps:\n  1. build\n  2. test\n  3. ship\n─── a session ──\n❯ \n",
 			screen{}},
 		{"an answer quoting a dialog", "● It asks: Do you want to proceed? Esc to cancel\n✻ Churned for 3s\n" +
 			"───\n❯ \n───\n  ⏵⏵ auto mode on\n", screen{}},
 		{"MCP elicitation", "───\n MCP server \"notion\" requests your input\n ❯ Accept\n   Decline\n Esc to cancel\n",
-			screen{prompt: true, form: true}},
+			screen{Prompt: true, Form: true}},
 		{"a menu you opened", "───\n Select model\n ❯ 1. Default\n   2. Opus\n Enter to set as default · Esc to cancel\n",
-			screen{prompt: true}},
+			screen{Prompt: true}},
 	} {
 		if got := readScreen(c.body); got != c.want {
 			t.Errorf("%s: readScreen = %+v, want %+v", c.name, got, c.want)
@@ -103,15 +103,15 @@ func TestReadScreenCaptures(t *testing.T) {
 		file string
 		want screen
 	}{
-		{"testdata/screen-permission.txt", screen{prompt: true, form: true}},
+		{"testdata/screen-permission.txt", screen{Prompt: true, Form: true}},
 		{"testdata/screen-answered.txt", screen{}},
 		// 2.1.287 from here down
-		{"testdata/screen-permission-bash.txt", screen{prompt: true, form: true}},
-		{"testdata/screen-question.txt", screen{prompt: true, form: true}},
-		{"testdata/screen-working-tasks.txt", screen{busy: true}},
-		{"testdata/screen-background-wait.txt", screen{busy: true}},
+		{"testdata/screen-permission-bash.txt", screen{Prompt: true, Form: true}},
+		{"testdata/screen-question.txt", screen{Prompt: true, Form: true}},
+		{"testdata/screen-working-tasks.txt", screen{Busy: true}},
+		{"testdata/screen-background-wait.txt", screen{Busy: true}},
 		{"testdata/screen-background-done.txt", screen{}},
-		{"testdata/screen-transcript.txt", screen{viewer: true}},
+		{"testdata/screen-transcript.txt", screen{Viewer: true}},
 	} {
 		b, err := os.ReadFile(c.file)
 		if err != nil {
@@ -128,10 +128,10 @@ func TestReadScreenCaptures(t *testing.T) {
 // together in both layouts, including when the panel is too short to fit.
 func TestListTopMatchesRender(t *testing.T) {
 	rows := []sess{
-		{pane: "%1", name: "alphamark", st: idle, w: 1},
-		{pane: "%2", name: "betamark", st: done, w: 2},
-		{pane: "%3", name: "gammamark", st: proc, w: 3},
-		{pane: "%4", name: "deltamark", st: urgent, w: 4},
+		{Pane: "%1", Name: "alphamark", St: idle, W: 1},
+		{Pane: "%2", Name: "betamark", St: done, W: 2},
+		{Pane: "%3", Name: "gammamark", St: proc, W: 3},
+		{Pane: "%4", Name: "deltamark", St: urgent, W: 4},
 	}
 	for _, top := range []bool{false, true} {
 		for _, h := range []int{44, 24, 14} {
@@ -170,10 +170,10 @@ func TestMetaLine(t *testing.T) {
 		it   sess
 		want string
 	}{
-		{"idle, no age", sess{st: idle}, ""},
-		{"done", sess{st: done, since: now - 120}, "DONE · 2m"},
-		{"working with subagents", sess{st: proc, since: now - 120, sub: 3}, "⤷3 · 2m"},
-		{"waiting on you, one subagent", sess{st: urgent, sub: 1}, "PERM · ⤷1"},
+		{"idle, no age", sess{St: idle}, ""},
+		{"done", sess{St: done, Since: now - 120}, "DONE · 2m"},
+		{"working with subagents", sess{St: proc, Since: now - 120, Sub: 3}, "⤷3 · 2m"},
+		{"waiting on you, one subagent", sess{St: urgent, Sub: 1}, "PERM · ⤷1"},
 	} {
 		if got := metaLine(c.it); got != c.want {
 			t.Errorf("%s: metaLine = %q, want %q", c.name, got, c.want)
@@ -185,13 +185,13 @@ func TestMetaLine(t *testing.T) {
 // second line, which shifts everything below it and breaks hitTest.
 func TestRowsFitWidth(t *testing.T) {
 	rows := []sess{
-		{pane: "%1", name: "dados financeiros no bigquery", st: idle, w: 6, since: 1},
-		{pane: "%2", name: "abel", st: urgent, w: 12, since: 1},
-		{pane: "%3", name: "dai/compact-warn", st: done, w: 3, since: 1, ctx: "88", sub: 12},
-		{pane: "%4", name: "portal/2747-ident", st: proc, w: 4, since: 1, flag: "prio"},
-		{pane: "%6", name: "hovered", st: done, w: 7, since: 1},
-		{pane: "%5", name: "abel/lgpd-export", st: urgent, w: 5, since: 1, flag: "paused"},
-		{pane: "%7", name: "dai/live", st: done, w: 1, since: 1, ctx: "40", dai: true},
+		{Pane: "%1", Name: "dados financeiros no bigquery", St: idle, W: 6, Since: 1},
+		{Pane: "%2", Name: "abel", St: urgent, W: 12, Since: 1},
+		{Pane: "%3", Name: "dai/compact-warn", St: done, W: 3, Since: 1, Ctx: "88", Sub: 12},
+		{Pane: "%4", Name: "portal/2747-ident", St: proc, W: 4, Since: 1, Flag: "prio"},
+		{Pane: "%6", Name: "hovered", St: done, W: 7, Since: 1},
+		{Pane: "%5", Name: "abel/lgpd-export", St: urgent, W: 5, Since: 1, Flag: "paused"},
+		{Pane: "%7", Name: "dai/live", St: done, W: 1, Since: 1, Ctx: "40", Dai: true},
 	}
 	th := themeFor(false)
 	for _, comp := range []bool{false, true} {
@@ -231,7 +231,7 @@ func TestUnreadMark(t *testing.T) {
 	if got := statusOf("unread", screen{}, true); got != done {
 		t.Errorf("unread should render green, got %v", got)
 	}
-	if got := statusOf("unread", screen{busy: true}, true); got != proc {
+	if got := statusOf("unread", screen{Busy: true}, true); got != proc {
 		t.Errorf("a session back at work outranks the pin, got %v", got)
 	}
 }
@@ -249,7 +249,7 @@ func TestLegendFits(t *testing.T) {
 // soundRow has to name the counter row in both layouts: a click there toggles
 // the sound instead of jumping to a session.
 func TestSoundRowIsTheCounterRow(t *testing.T) {
-	rows := []sess{{pane: "%1", name: "one", st: idle, w: 1}}
+	rows := []sess{{Pane: "%1", Name: "one", St: idle, W: 1}}
 	for _, top := range []bool{false, true} {
 		m := model{w: 28, h: 30, top: top, rows: rows}
 		m.recomputeDensity()
@@ -267,10 +267,10 @@ func TestSoundRowIsTheCounterRow(t *testing.T) {
 
 func TestPanelPerLineMatchesBlock(t *testing.T) {
 	rows := []sess{
-		{pane: "%1", name: "alphamark", st: idle, w: 1, since: 1},
-		{pane: "%2", name: "betamark", st: done, w: 2, since: 1},
-		{pane: "%3", name: "gammamark", st: proc, w: 3, since: 1},
-		{pane: "%4", name: "deltamark", st: urgent, w: 4, since: 1},
+		{Pane: "%1", Name: "alphamark", St: idle, W: 1, Since: 1},
+		{Pane: "%2", Name: "betamark", St: done, W: 2, Since: 1},
+		{Pane: "%3", Name: "gammamark", St: proc, W: 3, Since: 1},
+		{Pane: "%4", Name: "deltamark", St: urgent, W: 4, Since: 1},
 	}
 	for _, h := range []int{81, 44, 24, 14} {
 		for _, w := range []int{38, 28, 22} {
@@ -298,7 +298,7 @@ func TestItemCacheMatchesRender(t *testing.T) {
 						for frame := 0; frame < 9; frame++ {
 							for _, sel := range []bool{false, true} {
 								for _, cur := range []bool{false, true} {
-									it := sess{pane: "%7", name: nm, st: st, w: 3, since: since}
+									it := sess{Pane: "%7", Name: nm, St: st, W: 3, Since: since}
 									m := model{w: 38, h: 44, rows: []sess{it}, comp: comp,
 										frame: frame, pulse: map[string]int{"%7": pulse},
 										icache: map[itemKey]string{}}
@@ -334,7 +334,7 @@ func TestItemCacheMatchesRender(t *testing.T) {
 // spinner through its cycle has to produce a different row each step.
 func TestItemCacheFollowsSpinner(t *testing.T) {
 	th := themeFor(false)
-	it := sess{pane: "%7", name: "trabalhando", st: proc, w: 3, since: 1}
+	it := sess{Pane: "%7", Name: "trabalhando", St: proc, W: 3, Since: 1}
 	m := model{w: 38, h: 44, rows: []sess{it}, sel: -1,
 		pulse: map[string]int{}, icache: map[itemKey]string{}}
 	seen := map[string]bool{}
@@ -359,11 +359,11 @@ func TestCtxShownAndCached(t *testing.T) {
 		}
 		m := model{w: 38, h: 44, sel: -1, comp: comp,
 			pulse: map[string]int{}, icache: map[itemKey]string{}}
-		it := sess{pane: "%7", name: "dai/compact-warn", st: idle, w: 3, since: 1}
+		it := sess{Pane: "%7", Name: "dai/compact-warn", St: idle, W: 3, Since: 1}
 		if got := m.itemLines(it, 0, th); strings.Contains(got, want) {
 			t.Errorf("comp=%v: nothing published yet, %q not expected", comp, want)
 		}
-		it.ctx = "88"
+		it.Ctx = "88"
 		if got := m.itemLines(it, 0, th); !strings.Contains(got, want) {
 			t.Errorf("comp=%v: ctx=88 should show %q", comp, want)
 		}
@@ -386,10 +386,10 @@ func TestCtxShownMatchesHeight(t *testing.T) {
 		{"99", false, true},
 		{"", true, false}, // nothing published yet
 	} {
-		it := sess{pane: "%1", name: "s", st: idle, w: 1, since: 1, ctx: tc.ctx}
+		it := sess{Pane: "%1", Name: "s", St: idle, W: 1, Since: 1, Ctx: tc.ctx}
 		m := model{w: 28, h: 40, sel: -1, rows: []sess{it}}
 		if tc.cur {
-			m.current = it.pane
+			m.current = it.Pane
 		}
 		if got := m.ctxShown(it); got != tc.want {
 			t.Errorf("ctx=%q cur=%v: shown=%v, want %v", tc.ctx, tc.cur, got, tc.want)
@@ -408,7 +408,7 @@ func TestCtxTagOnlyWhenLow(t *testing.T) {
 		ctx  string
 		want string
 	}{{"", ""}, {"40", ""}, {"84", ""}, {"85", "◔85%"}, {"97", "◔97%"}} {
-		if got := ctxTag(sess{ctx: tc.ctx}); got != tc.want {
+		if got := ctxTag(sess{Ctx: tc.ctx}); got != tc.want {
 			t.Errorf("ctx=%q: tag %q, want %q", tc.ctx, got, tc.want)
 		}
 	}
@@ -436,14 +436,14 @@ func TestArrange(t *testing.T) {
 	names := func(rows []sess) string {
 		var out []string
 		for _, r := range rows {
-			out = append(out, r.name)
+			out = append(out, r.Name)
 		}
 		return strings.Join(out, " ")
 	}
 	mk := func() []sess {
 		return []sess{
-			{name: "a", flag: "prio"}, {name: "b"}, {name: "c", flag: "paused"},
-			{name: "d"}, {name: "e", flag: "prio"}, {name: "f", flag: "paused"},
+			{Name: "a", Flag: "prio"}, {Name: "b"}, {Name: "c", Flag: "paused"},
+			{Name: "d"}, {Name: "e", Flag: "prio"}, {Name: "f", Flag: "paused"},
 		}
 	}
 	rows := mk()
@@ -458,9 +458,9 @@ func TestArrange(t *testing.T) {
 	}
 	// The Dai session leads in both layouts, whatever its mark.
 	for _, top := range []bool{false, true} {
-		rows = append(mk(), sess{name: "dai", dai: true, flag: "prio"})
+		rows = append(mk(), sess{Name: "dai", Dai: true, Flag: "prio"})
 		arrange(rows, top)
-		if rows[0].name != "dai" {
+		if rows[0].Name != "dai" {
 			t.Errorf("top=%v: Dai session not first: %q", top, names(rows))
 		}
 	}
@@ -470,12 +470,12 @@ func TestArrange(t *testing.T) {
 // session's name has to land on that session in both layouts and densities.
 func TestHitTestMatchesBands(t *testing.T) {
 	base := []sess{
-		{pane: "%1", name: "alphamark", st: idle, w: 1, flag: "paused"},
-		{pane: "%2", name: "betamark", st: done, w: 2},
-		{pane: "%3", name: "gammamark", st: proc, w: 3, flag: "prio"},
-		{pane: "%4", name: "deltamark", st: urgent, w: 4, flag: "paused"},
-		{pane: "%5", name: "epsilonmark", st: idle, w: 5},
-		{pane: "%6", name: "daimark", st: done, w: 6, dai: true},
+		{Pane: "%1", Name: "alphamark", St: idle, W: 1, Flag: "paused"},
+		{Pane: "%2", Name: "betamark", St: done, W: 2},
+		{Pane: "%3", Name: "gammamark", St: proc, W: 3, Flag: "prio"},
+		{Pane: "%4", Name: "deltamark", St: urgent, W: 4, Flag: "paused"},
+		{Pane: "%5", Name: "epsilonmark", St: idle, W: 5},
+		{Pane: "%6", Name: "daimark", St: done, W: 6, Dai: true},
 	}
 	for _, top := range []bool{false, true} {
 		for _, h := range []int{60, 24} {
@@ -487,7 +487,7 @@ func TestHitTestMatchesBands(t *testing.T) {
 			for idx, it := range m.rows {
 				y := -1
 				for i, ln := range lines {
-					if strings.Contains(ln, it.name) {
+					if strings.Contains(ln, it.Name) {
 						y = i
 						break
 					}
@@ -497,7 +497,7 @@ func TestHitTestMatchesBands(t *testing.T) {
 				}
 				if got := m.hitTest(y); got != idx {
 					t.Errorf("top=%v h=%d comp=%v: %s drawn at %d, hitTest says %d, want %d",
-						top, h, m.comp, it.name, y, got, idx)
+						top, h, m.comp, it.Name, y, got, idx)
 				}
 			}
 		}
@@ -505,7 +505,7 @@ func TestHitTestMatchesBands(t *testing.T) {
 }
 
 func TestBandHeadFits(t *testing.T) {
-	rows := []sess{{flag: "paused"}, {flag: "prio"}}
+	rows := []sess{{Flag: "paused"}, {Flag: "prio"}}
 	for _, w := range []int{14, 27, 40} {
 		m := model{w: w, rows: rows}
 		for _, fl := range []string{"paused", "prio"} {
@@ -520,10 +520,10 @@ func TestBandHeadFits(t *testing.T) {
 // session's name in view — in both layouts, for a session at either end.
 func TestMenuPlacement(t *testing.T) {
 	base := []sess{
-		{pane: "%1", name: "alphamark", st: idle, w: 1},
-		{pane: "%2", name: "betamark", st: done, w: 2, flag: "prio"},
-		{pane: "%3", name: "gammamark", st: idle, w: 3, flag: "paused"},
-		{pane: "%4", name: "deltamark", st: proc, w: 4},
+		{Pane: "%1", Name: "alphamark", St: idle, W: 1},
+		{Pane: "%2", Name: "betamark", St: done, W: 2, Flag: "prio"},
+		{Pane: "%3", Name: "gammamark", St: idle, W: 3, Flag: "paused"},
+		{Pane: "%4", Name: "deltamark", St: proc, W: 4},
 	}
 	for _, top := range []bool{false, true} {
 		rows := append([]sess(nil), base...)
@@ -535,34 +535,34 @@ func TestMenuPlacement(t *testing.T) {
 			lo, hi = chromeRows, m.h
 		}
 		for _, it := range m.rows {
-			m.menu = &menu{pane: it.pane}
+			m.menu = &menu{pane: it.Pane}
 			y, n := m.menuTop(), len(m.menuOpts())+3
 			if y < lo || y+n > hi {
-				t.Errorf("top=%v %s: menu at %d..%d, list area is %d..%d", top, it.name, y, y+n, lo, hi)
+				t.Errorf("top=%v %s: menu at %d..%d, list area is %d..%d", top, it.Name, y, y+n, lo, hi)
 			}
 			lines := strings.Split(m.View(), "\n")
 			for r, ln := range lines {
 				if got := lipgloss.Width(ln); got != m.w {
-					t.Errorf("top=%v %s: row %d is %d wide with the menu open, want %d", top, it.name, r, got, m.w)
+					t.Errorf("top=%v %s: row %d is %d wide with the menu open, want %d", top, it.Name, r, got, m.w)
 				}
 			}
 			if !strings.Contains(lines[y], "╭") {
-				t.Errorf("top=%v %s: no menu box at row %d", top, it.name, y)
+				t.Errorf("top=%v %s: no menu box at row %d", top, it.Name, y)
 			}
 			for k := 0; k < n-3; k++ {
 				if got := m.menuHit(m.menuX()+2, y+1+k); got != k {
-					t.Errorf("top=%v %s: row %d hits option %d, want %d", top, it.name, y+1+k, got, k)
+					t.Errorf("top=%v %s: row %d hits option %d, want %d", top, it.Name, y+1+k, got, k)
 				}
 			}
 			seen := false
 			for _, ln := range lines {
-				seen = seen || strings.Contains(ln, it.name)
+				seen = seen || strings.Contains(ln, it.Name)
 			}
 			if !seen {
-				t.Errorf("top=%v: the menu covers %s", top, it.name)
+				t.Errorf("top=%v: the menu covers %s", top, it.Name)
 			}
 			if m.menuHit(m.menuX()+2, y) != -1 {
-				t.Errorf("top=%v %s: the box's top edge counts as an option", top, it.name)
+				t.Errorf("top=%v %s: the box's top edge counts as an option", top, it.Name)
 			}
 		}
 	}
@@ -571,7 +571,7 @@ func TestMenuPlacement(t *testing.T) {
 // A shell split beside claude can hold the active pane; the session is still
 // the one on screen, so it keeps its arrow, its meter and the cursor.
 func TestCurrentPaneFollowsWindow(t *testing.T) {
-	rows := []sess{{pane: "%16", sessWin: "0:9"}, {pane: "%12", sessWin: "0:7"}}
+	rows := []sess{{Pane: "%16", SessWin: "0:9"}, {Pane: "%12", SessWin: "0:7"}}
 	for _, c := range []struct{ pane, win, want string }{
 		{"%16", "0:9", "%16"}, // claude itself is active
 		{"%41", "0:9", "%16"}, // a shell beside it is
@@ -587,9 +587,9 @@ func TestCurrentPaneFollowsWindow(t *testing.T) {
 // bar can be smaller than the pinned Dai block: neither may panic.
 func TestPinnedViewAnyHeight(t *testing.T) {
 	rows := []sess{
-		{pane: "%1", name: "a", st: idle, w: 1},
-		{pane: "%2", name: "b", st: done, w: 2, flag: "prio"},
-		{pane: "%9", name: "dai/live", st: urgent, w: 9, dai: true},
+		{Pane: "%1", Name: "a", St: idle, W: 1},
+		{Pane: "%2", Name: "b", St: done, W: 2, Flag: "prio"},
+		{Pane: "%9", Name: "dai/live", St: urgent, W: 9, Dai: true},
 	}
 	arrange(rows, false)
 	for _, h := range []int{0, 1, 2, 3, 5, 8, 40} {
@@ -604,7 +604,7 @@ func TestPinnedViewAnyHeight(t *testing.T) {
 // With a Dai session up, the mascot is lit while its pane is in front of you;
 // without one, the bar's own focus lights it, as before.
 func TestMascotLit(t *testing.T) {
-	dai := []sess{{pane: "%1", name: "a"}, {pane: "%9", name: "dai/live", dai: true}}
+	dai := []sess{{Pane: "%1", Name: "a"}, {Pane: "%9", Name: "dai/live", Dai: true}}
 	for _, c := range []struct {
 		rows             []sess
 		termFoc, focused bool
@@ -626,7 +626,7 @@ func TestMascotLit(t *testing.T) {
 
 // A click on a badge lands on the badge drawn there, in both sizes of mascot.
 func TestBadgeAtMatchesRender(t *testing.T) {
-	rows := []sess{{pane: "%1", name: "a", st: idle, w: 1}, {pane: "%9", name: "dai/live", st: done, w: 9, dai: true}}
+	rows := []sess{{Pane: "%1", Name: "a", St: idle, W: 1}, {Pane: "%9", Name: "dai/live", St: done, W: 9, Dai: true}}
 	arrange(rows, false)
 	for _, w := range []int{28, 36, 45} {
 		m := model{w: w, h: 60, rows: rows, live: "armed", watch: "recording"}
