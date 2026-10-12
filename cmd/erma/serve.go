@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -182,6 +183,18 @@ func serveOn(ctx context.Context, ln net.Listener, srv *server) error {
 	}
 }
 
+// pathHasDotDot: true when any path segment is literally "..". A single "." or
+// an embedded ".." inside a longer segment (e.g. "foo..bar") does NOT count —
+// those are not traversal.
+func pathHasDotDot(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // validateAddr: a non-loopback bind requires the explicit override. Hostnames
 // that resolve to multiple addresses would also need checking in principle, but
 // this subcommand is only ever bound to a literal IP in production — the laptop
@@ -256,6 +269,13 @@ func (s *server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(headerFunnel) != "" {
 			http.Error(w, "forbidden: Tailscale Funnel requests are not accepted", http.StatusForbidden)
+			return
+		}
+		// Hard-reject any API path that carries a `..` segment, before the
+		// mux's own cleanPath turns it into a 301 to a different URL. The spec
+		// requires 404 for traversal attempts on /api/sessions/{id}/...
+		if strings.HasPrefix(r.URL.Path, "/api/") && pathHasDotDot(r.URL.Path) {
+			http.NotFound(w, r)
 			return
 		}
 		if s.flags.devSkipAuth {
