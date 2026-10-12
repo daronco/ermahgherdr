@@ -160,6 +160,25 @@ a handful of tmux options and one state file. See
 window `<n>`. `s` toggles the sound, same as clicking the badge in the counter
 row.
 
+## Security
+
+Every pull request to `main` (and every push to `main`) runs the following
+GitHub Actions checks:
+
+- **CI** — `gofmt -l`, `go build`, `go vet`, `go test`, and
+  [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck)
+  across the whole module. A reachable vulnerability fails the job.
+- **gitleaks** — scans the PR diff for secrets. One match fails the job.
+- **CodeQL** — GitHub's static analysis for Go with the default query suite,
+  also on a weekly schedule.
+- **Dependabot** — opens weekly PRs for outdated Go modules and GitHub
+  Actions.
+
+Two settings-only safeguards are also enabled on github.com for this repo:
+**secret scanning** and **push protection** — pushes carrying a known secret
+pattern are blocked at the server before the commit lands. See
+[GitHub's docs](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning).
+
 ---
 
 Made for [Dai](https://github.com/daronco) 👾
