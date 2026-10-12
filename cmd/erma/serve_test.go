@@ -84,7 +84,10 @@ func stubGather(rows ...apiSession) func() []apiSession {
 
 func mkServer(login string, dev bool, rows ...apiSession) *server {
 	srv := newServer(serveFlags{tailscaleLogin: login, devSkipAuth: dev})
-	srv.gather = stubGather(rows...)
+	srv.hub.gather = stubGather(rows...)
+	// Seed the hub snapshot so handlers (which read from the hub only) can
+	// return rows without a running tick loop.
+	srv.hub.tick()
 	return srv
 }
 
@@ -348,22 +351,3 @@ func TestToAPIFallsBackToPane(t *testing.T) {
 	}
 }
 
-// clientIsLoopback: just enough coverage to prove the helper does what the
-// name says — the mux does not use it yet, but a future change might.
-func TestClientIsLoopback(t *testing.T) {
-	for _, c := range []struct {
-		addr string
-		want bool
-	}{
-		{"127.0.0.1:12345", true},
-		{"[::1]:12345", true},
-		{"10.0.0.5:80", false},
-		{"203.0.113.1:443", false},
-	} {
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		r.RemoteAddr = c.addr
-		if got := clientIsLoopback(r); got != c.want {
-			t.Errorf("clientIsLoopback(%q) = %v, want %v", c.addr, got, c.want)
-		}
-	}
-}

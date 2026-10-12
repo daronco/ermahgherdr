@@ -18,8 +18,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/daronco/ermahgherdr/internal/session"
@@ -147,20 +148,30 @@ func runServeWith(sf serveFlags) error {
 	log.Printf("erma serve: listening on %s", ln.Addr())
 
 	srv := newServer(sf)
-	ctx, stop := context.WithCancel(context.Background())
+	// signal.NotifyContext wires SIGINT/SIGTERM to the hub + shutdown path so
+	// Ctrl+C triggers a graceful stop instead of killing in-flight responses.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go srv.hub.run(ctx)
 
 	s := &http.Server{Handler: srv.mux(), ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Serve(ln) }()
+
 	select {
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
+		return nil
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown: %w", err)
+		}
+		return nil
 	}
-	return nil
 }
 
 // validateAddr: a non-loopback bind requires the explicit override. Hostnames
@@ -188,32 +199,19 @@ func validateAddr(addr string, allowNonLoopback bool) error {
 	return nil
 }
 
-// server bundles the mux-building state the handlers close over.
+// server bundles the mux-building state the handlers close over. The hub owns
+// the only gather path — handlers never call session.Gather directly, so the
+// permMiss map is touched by exactly one goroutine (the hub tick) and can't
+// race between the poller and HTTP handlers.
 type server struct {
 	flags serveFlags
 	hub   *sseHub
-	// gather is overridable so the tests can skip tmux. In production it is
-	// session.Gather bound to a package-level permMiss map.
-	gather func() []apiSession
 }
-
-// permMiss is the per-pane counter PermAlive consults. The bar owns a copy of
-// this inside its model; the server keeps its own so a bar session is not
-// required for serve to run.
-var servePermMiss = map[string]int{}
 
 func newServer(sf serveFlags) *server {
 	return &server{
 		flags: sf,
 		hub:   newSSEHub(),
-		gather: func() []apiSession {
-			rows, _ := session.Gather(servePermMiss)
-			out := make([]apiSession, len(rows))
-			for i, r := range rows {
-				out[i] = toAPI(r)
-			}
-			return out
-		},
 	}
 }
 
@@ -271,7 +269,13 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	rows := s.gather()
+	// Always read from the hub snapshot: the hub owns permMiss and the only
+	// goroutine that calls session.Gather. Before the first tick there is no
+	// snapshot — return an empty array so the client can render without racing.
+	rows, _ := s.hub.snapshot()
+	if rows == nil {
+		rows = []apiSession{}
+	}
 	_ = json.NewEncoder(w).Encode(rows)
 }
 
@@ -299,12 +303,14 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer s.hub.unsubscribe(ch)
 
 	// On connect, write the current snapshot immediately so the UI never shows
-	// an empty list waiting for the next tick.
-	if snap, ok := s.hub.snapshot(); ok {
-		writeSSE(w, "sessions", snap)
-	} else {
-		writeSSE(w, "sessions", s.gather())
+	// an empty list waiting for the next tick. Before the first tick we send an
+	// empty array rather than calling gather here: the hub owns permMiss, and
+	// a handler-side gather would race with the poller.
+	snap, ok := s.hub.snapshot()
+	if !ok {
+		snap = []apiSession{}
 	}
+	writeSSE(w, "sessions", snap)
 	flusher.Flush()
 
 	ctx := r.Context()
@@ -331,6 +337,10 @@ func writeSSE(w http.ResponseWriter, event string, payload any) {
 // loop, which calls session.Gather, diffs the result against the last snapshot,
 // and broadcasts on change. A channel-based fan-out keeps the handlers simple
 // and lets the hub run on its own context.
+//
+// permMiss is the per-pane counter PermAlive consults, kept here so it is
+// touched by exactly one goroutine (the tick loop); handlers only read the
+// post-tick snapshot through the mutex-guarded accessor.
 type sseHub struct {
 	mu          sync.Mutex
 	subscribers map[chan []apiSession]struct{}
@@ -338,15 +348,17 @@ type sseHub struct {
 	hasLast     bool
 	gather      func() []apiSession
 	interval    time.Duration
+	permMiss    map[string]int
 }
 
 func newSSEHub() *sseHub {
 	h := &sseHub{
 		subscribers: map[chan []apiSession]struct{}{},
 		interval:    servePollInterval,
+		permMiss:    map[string]int{},
 	}
 	h.gather = func() []apiSession {
-		rows, _ := session.Gather(servePermMiss)
+		rows, _ := session.Gather(h.permMiss)
 		out := make([]apiSession, len(rows))
 		for i, r := range rows {
 			out[i] = toAPI(r)
@@ -433,17 +445,4 @@ func sameSessions(a, b []apiSession) bool {
 		}
 	}
 	return true
-}
-
-// clientIsLoopback: the one condition the --insecure-non-loopback flag relaxes.
-// Not used by the mux today — the listener's bind address is the enforcement
-// point — but kept here as a defensive check callers can wire in.
-func clientIsLoopback(r *http.Request) bool {
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
-	}
-	host = strings.Trim(host, "[]")
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

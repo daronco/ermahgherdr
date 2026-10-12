@@ -186,21 +186,5 @@
     });
   }
 
-  // tickAges: the ages tick every second even when the server did not emit a
-  // new frame. Only the meta line needs it; rebuilding it in place is cheap.
-  function tickAges() {
-    for (const [, n] of nodes) {
-      // Rebuild from the dataset we last rendered: n.meta already carries the
-      // state via sibling classes; the state glyph gives us enough to key off
-      // without storing the raw session on the node. We instead refetch via
-      // /api/sessions? No — the age field we have is just n.meta.textContent.
-      // Keep it simple: skip if there is nothing to tick.
-    }
-    // Note: full tick support would require stashing `since` on each node; the
-    // SSE poller runs at 600ms, which is already enough resolution for the
-    // visible age bucket. We keep this hook so a future PR can refine it.
-  }
-
   connect();
-  setInterval(tickAges, 1000);
 })();
