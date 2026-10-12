@@ -1,9 +1,9 @@
 // erma serve — a loopback-only HTTP endpoint that lets the user drive the
 // erma sidebar from Chrome on Android over `tailscale serve`. This file owns
 // the subcommand's flag parsing, the HTTP mux, the SSE hub, and the Tailscale
-// identity middleware. It is deliberately READ-ONLY against tmux state in this
-// PR: no handler writes an @erma_* option, flags.json or anything that would
-// move a session under the bar.
+// identity middleware. The whole process is READ-ONLY against tmux state: the
+// poller uses session.GatherReadOnly, so neither it nor any handler writes an
+// @erma_* option, flags.json or anything that would move a session under the bar.
 package main
 
 import (
@@ -200,7 +200,7 @@ func validateAddr(addr string, allowNonLoopback bool) error {
 }
 
 // server bundles the mux-building state the handlers close over. The hub owns
-// the only gather path — handlers never call session.Gather directly, so the
+// the only gather path — handlers never call session.GatherReadOnly directly, so the
 // permMiss map is touched by exactly one goroutine (the hub tick) and can't
 // race between the poller and HTTP handlers.
 type server struct {
@@ -270,7 +270,7 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	// Always read from the hub snapshot: the hub owns permMiss and the only
-	// goroutine that calls session.Gather. Before the first tick there is no
+	// goroutine that calls session.GatherReadOnly. Before the first tick there is no
 	// snapshot — return an empty array so the client can render without racing.
 	rows, _ := s.hub.snapshot()
 	if rows == nil {
@@ -334,7 +334,7 @@ func writeSSE(w http.ResponseWriter, event string, payload any) {
 }
 
 // sseHub: one poller fans updates out to every subscriber. One tick wakes the
-// loop, which calls session.Gather, diffs the result against the last snapshot,
+// loop, which calls session.GatherReadOnly, diffs the result against the last snapshot,
 // and broadcasts on change. A channel-based fan-out keeps the handlers simple
 // and lets the hub run on its own context.
 //
@@ -358,7 +358,7 @@ func newSSEHub() *sseHub {
 		permMiss:    map[string]int{},
 	}
 	h.gather = func() []apiSession {
-		rows, _ := session.Gather(h.permMiss)
+		rows, _ := session.GatherReadOnly(h.permMiss)
 		out := make([]apiSession, len(rows))
 		for i, r := range rows {
 			out[i] = toAPI(r)

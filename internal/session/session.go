@@ -446,7 +446,13 @@ func atoi64(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 //
 // permMiss is the across-polls counter PermAlive consults; the caller owns the
 // map so the state survives across calls.
-func Gather(permMiss map[string]int) ([]Session, Poll) {
+func Gather(permMiss map[string]int) ([]Session, Poll) { return gather(permMiss, true) }
+
+// GatherReadOnly is Gather without the write-backs (the "done" conclusion and
+// the @erma_flag sync): the same rows, for a reader that must not touch tmux.
+func GatherReadOnly(permMiss map[string]int) ([]Session, Poll) { return gather(permMiss, false) }
+
+func gather(permMiss map[string]int, write bool) ([]Session, Poll) {
 	f := strings.Join([]string{
 		"#{pane_id}", "#{session_name}", "#{window_index}", "#{pane_index}",
 		"#{@erma_wait}", "#{@erma_wait_since}", "#{pane_current_path}", "#{pane_title}",
@@ -482,7 +488,7 @@ func Gather(permMiss map[string]int) ([]Session, Poll) {
 		// Write the conclusion back, so the hook's next transition compares
 		// against the state we are actually showing — and does not ping for a
 		// "finished" it thinks is new.
-		if seen && st == Done && c[4] != "done" && c[4] != "unread" {
+		if write && seen && st == Done && c[4] != "done" && c[4] != "unread" {
 			run("tmux", "set", "-p", "-t", c[0], "@erma_wait", "done")
 		}
 		// @ctx_label, when something outside sets it, is the same short label the
@@ -496,7 +502,7 @@ func Gather(permMiss map[string]int) ([]Session, Poll) {
 		if sid != "" {
 			fl = flags[sid].Flag
 		}
-		if fl != c[11] { // erma-hook unpaused it, or the pane is new to the mark
+		if write && fl != c[11] { // erma-hook unpaused it, or the pane is new to the mark
 			SetPaneFlag(c[0], fl)
 		}
 		rows = append(rows, Session{
