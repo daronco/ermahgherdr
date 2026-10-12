@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -348,5 +349,52 @@ func TestToAPIFallsBackToPane(t *testing.T) {
 	a := apiSession{ID: "%7", Pane: "%7"}
 	if a.ID != a.Pane {
 		t.Errorf("expected ID == Pane when no sid")
+	}
+}
+
+// Without a configured login the server refuses to start — before it listens.
+func TestServeRequiresLogin(t *testing.T) {
+	// The timeout only matters if the guard regresses: the server would start
+	// and return nil when it expires, failing the test instead of hanging it.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := runServeWith(ctx, serveFlags{addr: "127.0.0.1:0"})
+	if err == nil || !strings.Contains(err.Error(), "--tailscale-login") {
+		t.Fatalf("runServeWith without login: got %v, want a --tailscale-login error", err)
+	}
+}
+
+// Cancelling the context (what SIGTERM does) with an SSE client still attached
+// stops the server promptly and cleanly, not after the 5 s Shutdown timeout.
+func TestShutdownWithOpenStream(t *testing.T) {
+	srv := mkServer("ok@example.com", false, apiSession{Pane: "%1", Name: "a", State: "idle"})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- serveOn(ctx, ln, srv) }()
+
+	req, _ := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/api/stream", nil)
+	req.Header.Set(headerLogin, "ok@example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if _, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil {
+		t.Fatalf("stream did not start: %v", err)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serveOn returned %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveOn still running 2s after cancel with an open stream")
 	}
 }

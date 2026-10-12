@@ -117,19 +117,21 @@ func parseServeFlags(args []string, w *os.File) (serveFlags, error) {
 }
 
 // runServe is the subcommand entry point. It validates the flags, starts the
-// hub + listener, and blocks until a terminal signal (SIGINT/SIGTERM) is
-// delivered via context cancellation — the current main() exits on return.
+// hub + listener, and blocks until SIGINT/SIGTERM cancels the context — the
+// current main() exits on return.
 func runServe(args []string) error {
 	sf, err := parseServeFlags(args, os.Stderr)
 	if err != nil {
 		return err
 	}
-	return runServeWith(sf)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runServeWith(ctx, sf)
 }
 
 // runServeWith: the step after flag parsing, split so tests can hand a built-up
 // serveFlags straight in.
-func runServeWith(sf serveFlags) error {
+func runServeWith(ctx context.Context, sf serveFlags) error {
 	if err := validateAddr(sf.addr, sf.insecureNonLoopbck); err != nil {
 		return err
 	}
@@ -144,17 +146,22 @@ func runServeWith(sf serveFlags) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", sf.addr, err)
 	}
-	defer ln.Close()
 	log.Printf("erma serve: listening on %s", ln.Addr())
+	return serveOn(ctx, ln, newServer(sf))
+}
 
-	srv := newServer(sf)
-	// signal.NotifyContext wires SIGINT/SIGTERM to the hub + shutdown path so
-	// Ctrl+C triggers a graceful stop instead of killing in-flight responses.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// serveOn runs the hub and the HTTP server on ln until ctx is cancelled, then
+// shuts down gracefully. Requests inherit ctx, so an open SSE stream ends with
+// it instead of holding Shutdown until its timeout.
+func serveOn(ctx context.Context, ln net.Listener, srv *server) error {
+	defer ln.Close()
 	go srv.hub.run(ctx)
 
-	s := &http.Server{Handler: srv.mux(), ReadHeaderTimeout: 10 * time.Second}
+	s := &http.Server{
+		Handler:           srv.mux(),
+		ReadHeaderTimeout: 10 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Serve(ln) }()
 
