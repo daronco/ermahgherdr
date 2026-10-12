@@ -13,7 +13,7 @@ regexes = ['''(?i)\b(?:laptop|host|hostname|machine)\.(?:tailnet|example)\.ts\.n
 
 [[rules]]
 id = "tailscale-ip"
-description = "Tailscale CGNAT address (100.64.0.0/10)"
+description = "Tailscale CGNAT address (shared address space used by tailnets)"
 regex = '''\b100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\b'''
 keywords = ["100."]
 
