@@ -200,6 +200,9 @@ func TestManifestServed(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200", w.Code)
 	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/manifest+json" {
+		t.Errorf("manifest content-type: got %q, want application/manifest+json", ct)
+	}
 	if !strings.Contains(w.Body.String(), `"start_url"`) {
 		t.Errorf("manifest missing start_url: %s", w.Body.String())
 	}

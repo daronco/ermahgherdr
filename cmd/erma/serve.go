@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -231,6 +232,8 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("/api/sessions", s.handleSessions)
 	m.HandleFunc("/api/stream", s.handleStream)
 	m.Handle("/", http.FileServer(http.FS(root)))
+	// Go's built-in table has no .webmanifest entry and would sniff it as text/plain.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 	return s.authMiddleware(m)
 }
 
