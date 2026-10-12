@@ -57,9 +57,8 @@ func tmuxFixture(t *testing.T) (opt func(name string) string) {
 	t.Setenv("TMUX", path+",0,0")
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_STATE_HOME", dir)
-	// tmux >= 3.3 errors on `show -gv` of an unset option, which ends PollPanes'
-	// command list before any pane is captured; erma sets it on first toggle.
-	tm("set", "-g", "@erma_sound", "off")
+	// @erma_sound is deliberately left unset, as on a fresh tmux server: PollPanes
+	// must still read every pane (tmux >= 3.3 errors on `show -gv` of it).
 	tm("set", "-p", "-t", pane, "@erma_flag", "prio")
 	tm("set", "-p", "-t", pane, "@erma_wait", "working")
 	return func(name string) string { return tm("show", "-p", "-q", "-v", "-t", pane, name) }
