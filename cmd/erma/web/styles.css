@@ -117,3 +117,105 @@ main { padding: 8px 10px 24px; max-width: 760px; margin: 0 auto; }
 }
 .row .ctx.warn .fill { background: var(--proc); }
 .row .ctx.high .fill { background: var(--ctx); }
+
+/* Row-tap: the whole row becomes a link to the conversation view. The anchor
+   wraps the row so taps on name, meta or badge all count. */
+.row a.row-link,
+.row a.row-link:visited { color: inherit; text-decoration: none; }
+.row { cursor: pointer; }
+.row:active { filter: brightness(1.08); }
+
+/* ------------------------------------------------------------------
+   Conversation page (/conversation.html)
+   ------------------------------------------------------------------ */
+.conv-page { padding-bottom: 200px; } /* leave room for the sticky composer */
+
+.topbar .back {
+  color: var(--fg); text-decoration: none; font-size: 20px;
+  padding: 0 6px; line-height: 1;
+}
+
+.conv-main { max-width: 760px; margin: 0 auto; padding: 10px; }
+
+.perm-banner {
+  position: sticky; top: 54px; z-index: 2;
+  margin: 8px 10px; padding: 10px 12px;
+  background: var(--row-urgent); border-left: 4px solid var(--urgent);
+  border-radius: 6px;
+  color: var(--fg);
+}
+.perm-head { font-weight: 700; color: var(--urgent); letter-spacing: 0.3px; font-size: 12px; text-transform: uppercase; }
+.perm-body { margin-top: 4px; color: var(--fg); white-space: pre-wrap; }
+.perm-keys { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+.turns { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.turn {
+  background: var(--row-idle);
+  border-left: 3px solid var(--rule);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.turn-user      { border-left-color: var(--focus); }
+.turn-assistant { border-left-color: var(--done); background: var(--row-done); }
+.turn-tool_result { border-left-color: var(--proc); }
+
+.turn-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  color: var(--meta); font-size: 12px;
+  margin-bottom: 4px;
+}
+.turn-role { font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+.turn-user .turn-role      { color: var(--focus); }
+.turn-assistant .turn-role { color: var(--done); }
+.turn-tool_result .turn-role { color: var(--proc); }
+
+.turn-body { color: var(--fg); white-space: pre-wrap; word-wrap: break-word; }
+
+.turn-tool { display: flex; align-items: baseline; gap: 8px; }
+.tool-name { color: var(--ctx); font-weight: 700; }
+.tool-args {
+  color: var(--calm); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.tool-detail { margin-top: 6px; color: var(--calm); font-size: 12px; }
+.tool-detail pre { white-space: pre-wrap; color: var(--calm); margin: 4px 0 0; }
+
+/* Composer sits on the viewport bottom. */
+.composer {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 3;
+  background: #181818; border-top: 1px solid var(--rule);
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 8px;
+}
+.qkbar { display: flex; gap: 6px; flex-wrap: wrap; }
+.qk {
+  background: #2a3030; color: var(--fg); border: 1px solid var(--rule);
+  padding: 6px 10px; border-radius: 6px; font: inherit; font-weight: 600;
+  min-width: 44px; min-height: 36px;
+  cursor: pointer;
+}
+.qk:active { filter: brightness(1.15); }
+.qk.danger { color: #e05b57; border-color: #4a2323; }
+
+.replybox { display: flex; align-items: flex-end; gap: 6px; }
+.replybox textarea {
+  flex: 1; min-height: 42px; max-height: 180px;
+  background: #141414; color: var(--fg); border: 1px solid var(--rule);
+  border-radius: 6px; padding: 8px; font: inherit; resize: vertical;
+}
+.replybtns { display: flex; gap: 6px; }
+.send, .voice {
+  background: var(--focus); color: #16191a; border: 0; border-radius: 6px;
+  padding: 8px 14px; font-weight: 700; cursor: pointer;
+  min-height: 42px;
+}
+.send:disabled { opacity: 0.6; cursor: not-allowed; }
+.voice { background: #2a3030; color: var(--fg); }
+.voice.listening { background: var(--urgent); color: #16191a; }
+
+/* Prominent whole-page urgent tint when the banner is up. */
+body.state-urgent .topbar { background: #241a2e; }
+

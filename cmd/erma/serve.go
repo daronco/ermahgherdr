@@ -214,12 +214,14 @@ func validateAddr(addr string, allowNonLoopback bool) error {
 type server struct {
 	flags serveFlags
 	hub   *sseHub
+	conv  *convHub
 }
 
 func newServer(sf serveFlags) *server {
 	return &server{
 		flags: sf,
 		hub:   newSSEHub(),
+		conv:  newConvHub(),
 	}
 }
 
@@ -230,6 +232,7 @@ func (s *server) mux() http.Handler {
 	}
 	m := http.NewServeMux()
 	m.HandleFunc("/api/sessions", s.handleSessions)
+	m.HandleFunc("/api/sessions/", s.serveSessionRoute)
 	m.HandleFunc("/api/stream", s.handleStream)
 	m.Handle("/", http.FileServer(http.FS(root)))
 	// Go's built-in table has no .webmanifest entry and would sniff it as text/plain.
