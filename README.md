@@ -162,7 +162,7 @@ row.
 
 ## Running `erma serve`
 
-`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. This PR ships the list + SSE only — read-only; see the issue roadmap for per-session reads and the conversation view.
+`erma serve` runs a tiny HTTP endpoint on **loopback only** that mirrors the bar's view of your Claude tmux sessions to a browser. The intended rig is a Linux laptop + tmux + Chrome on Android reaching the laptop over Tailscale, with `tailscale serve` doing TLS termination and injecting the identity header the server trusts. It is read-only: it shows the session list (JSON + SSE) and never writes tmux options or `flags.json`.
 
 Flags:
 
@@ -179,15 +179,13 @@ Auth model, enforced on every request (static assets, API, SSE):
 
 ### systemd `--user` unit
 
-Drop this at `~/.config/systemd/user/erma-serve.service`, replacing the login with your own:
+Install the binary with `make install` (it lands in `~/.local/bin/erma`), then drop this at `~/.config/systemd/user/erma-serve.service`, replacing the login with your own tailnet login (`tailscale status --json | jq -r '.User[(.Self.UserID|tostring)].LoginName'` prints it):
 
 ```ini
 [Unit]
 Description=erma serve — read-only HTTP view of Claude tmux sessions
-After=default.target
 
 [Service]
-Type=simple
 Environment=ERMA_TAILSCALE_LOGIN=you@example.com
 ExecStart=%h/.local/bin/erma serve --addr 127.0.0.1:8731
 Restart=on-failure
@@ -205,15 +203,20 @@ systemctl --user enable --now erma-serve.service
 journalctl --user -u erma-serve -f
 ```
 
+The service talks to the tmux server on its default socket, so it sees the sessions of a tmux started the usual way by the same user.
+
 ### Exposing over Tailscale
 
-With the server bound to `127.0.0.1:8731`, hand that port to `tailscale serve` for HTTPS over your tailnet:
+The tailnet needs MagicDNS and HTTPS certificates enabled (admin console → DNS). With the server bound to `127.0.0.1:8731`, hand that port to `tailscale serve`:
 
 ```sh
-tailscale serve --https=443 http://127.0.0.1:8731
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8731
+tailscale serve status
 ```
 
-That gives you `https://<hostname>.<tailnet>.ts.net/` from any device signed in to your tailnet, with Tailscale injecting the identity header the server checks. **Do not** use `tailscale funnel` — the server refuses Funnel-marked requests on purpose, and the loopback bind would block it anyway.
+`--bg` keeps the config after the command exits and across reboots; without it the proxy dies with your terminal. To run it without `sudo`, make yourself the operator once: `sudo tailscale set --operator=$USER`.
+
+That gives you `https://<hostname>.<tailnet>.ts.net/` from any device signed in to your tailnet, with Tailscale injecting the identity header the server checks. A `401` there means the header did not arrive; a `403` means the login differs from `ERMA_TAILSCALE_LOGIN`. **Do not** use `tailscale funnel` — the server refuses Funnel-marked requests on purpose, and the loopback bind would block it anyway.
 
 ## Security
 
