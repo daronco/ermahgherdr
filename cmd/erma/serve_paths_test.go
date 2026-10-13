@@ -119,22 +119,22 @@ func TestValidateHomePathFollowsSymlinks(t *testing.T) {
 		homeDir: func() (string, error) { return "/home/alice", nil },
 		evalSymlink: func(p string) (string, error) {
 			if p == "/home/alice" {
-				return "/mnt/users/alice", nil
+				return "/var/home/alice", nil
 			}
 			return p, nil
 		},
 		stat: func(p string) (os.FileInfo, error) {
-			if p == "/mnt/users/alice/projects/foo" {
+			if p == "/var/home/alice/projects/foo" {
 				return fakeFileInfo{dir: true}, nil
 			}
 			return nil, os.ErrNotExist
 		},
 	}
-	got, err := v.validate("/mnt/users/alice/projects/foo")
+	got, err := v.validate("/var/home/alice/projects/foo")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if got != "/mnt/users/alice/projects/foo" {
+	if got != "/var/home/alice/projects/foo" {
 		t.Errorf("got %q", got)
 	}
 	// A path given under the pre-resolve name must NOT slip through, because
