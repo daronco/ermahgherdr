@@ -218,6 +218,8 @@ func TestSendKeyRejectsUnknownToken(t *testing.T) {
 		"a",
 		"",
 		"C-x", // Ctrl combos outside the allowlist
+		"C-z", // suspends claude; the pane leaves the list
+		"C-d", // can end claude
 	}
 	for _, token := range rejected {
 		*calls = (*calls)[:0]
@@ -318,7 +320,7 @@ func TestSendKeyGetIs405(t *testing.T) {
 func TestAllowlistMatchesSpec(t *testing.T) {
 	want := []string{
 		"Escape", "Tab", "Up", "Down", "Left", "Right", "Enter", "BSpace",
-		"C-c", "C-d", "C-r", "C-z", "C-l", "C-u", "C-w", "C-a", "C-e",
+		"C-c", "C-r", "C-l", "C-u", "C-w", "C-a", "C-e",
 	}
 	if len(terminalKeyAllowlist) != len(want) {
 		t.Fatalf("allowlist size = %d, want %d: %+v", len(terminalKeyAllowlist), len(want), terminalKeyAllowlist)

@@ -192,9 +192,9 @@ Allowlisted keys:
 | `C-w` | Delete word back |
 | `C-l` | Clear screen |
 | `C-r` | Reverse history search |
-| `C-z` | Suspend foreground job |
-| `C-d` | EOF / delete char forward |
 | `C-c` | Interrupt |
+
+`C-z` and `C-d` are refused on both key routes (`/key` and `/keys`): `C-z` suspends `claude`, dropping the pane to a shell and out of the session list, and `C-d` can end it — either way remote access is lost.
 
 No PTY, no WebSocket, no batched key endpoint — one HTTP request per keystroke, every one through the same allowlist. `POST /keys` reuses the Conversation tab's gates: Origin match against the request's own Host, the per-session CSRF token, and a sid that resolves to a live Claude pane.
 

@@ -21,7 +21,9 @@ import (
 // side is the only label the client may send, so a request body cannot
 // invent a new tmux key name by typing it. Covers the keys an Android soft
 // keyboard cannot type: Esc, Tab, arrows, Enter, Backspace, and the Ctrl
-// combos that unstick a shell.
+// combos that unstick a shell. C-z and C-d are deliberately absent: C-z
+// suspends claude (the pane drops to a shell and leaves the list, ending
+// remote access) and C-d can end it.
 var terminalKeyAllowlist = map[string]string{
 	"Escape": "Escape",
 	"Tab":    "Tab",
@@ -32,9 +34,7 @@ var terminalKeyAllowlist = map[string]string{
 	"Enter":  "Enter",
 	"BSpace": "BSpace",
 	"C-c":    "C-c",
-	"C-d":    "C-d",
 	"C-r":    "C-r",
-	"C-z":    "C-z",
 	"C-l":    "C-l",
 	"C-u":    "C-u",
 	"C-w":    "C-w",

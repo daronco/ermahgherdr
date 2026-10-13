@@ -317,7 +317,7 @@ func TestKeyAllowlistAccepted(t *testing.T) {
 func TestKeyRejectedWhenNotInAllowlist(t *testing.T) {
 	srv, calls := mkConvServer(t, map[string]string{"s1": "%1"}, nil)
 	tok := mintCSRF(t, srv, "s1")
-	for _, bad := range []string{"C-x", "4", "F1", "rm -rf /", "", "escape"} {
+	for _, bad := range []string{"C-x", "C-z", "C-d", "ctrl-z", "ctrl-d", "4", "F1", "rm -rf /", "", "escape"} {
 		body, _ := json.Marshal(keyBody{Key: bad})
 		r := httptest.NewRequest(http.MethodPost, "/api/sessions/s1/key", bytes.NewReader(body))
 		r.Header.Set(headerLogin, "ok@example.com")
