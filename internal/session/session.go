@@ -442,22 +442,22 @@ type RegistryEntry struct {
 	Sid   string    // Claude session id
 	Cwd   string    // the directory Claude Code was launched in, "" if absent
 	MTime time.Time // registry file mtime, for recency ordering
+	Alive bool      // its process still runs; an ended session's file stays behind
 }
 
-// Registry returns one entry per live Claude Code session file. A session whose
-// pid is gone is dropped — the file is a leftover from a crashed claude.
+// Registry returns one entry per Claude Code session file, ended sessions
+// included: where a session ran is still a good place to start the next one.
+// Anything that targets a pane must use PaneSessions, which keeps only the live.
 func Registry() []RegistryEntry {
 	raw := readSessionRegistry()
 	out := make([]RegistryEntry, 0, len(raw))
 	for _, r := range raw {
-		if !r.alive {
-			continue
-		}
 		out = append(out, RegistryEntry{
 			Pane:  r.pane,
 			Sid:   r.sid,
 			Cwd:   r.cwd,
 			MTime: r.mtime,
+			Alive: r.alive,
 		})
 	}
 	return out

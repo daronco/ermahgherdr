@@ -278,7 +278,8 @@ func TestRecentDirs(t *testing.T) {
 	home := t.TempDir()
 	a := filepath.Join(home, "a")
 	b := filepath.Join(home, "b")
-	for _, d := range []string{a, b} {
+	c := filepath.Join(home, "c")
+	for _, d := range []string{a, b, c} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -290,19 +291,20 @@ func TestRecentDirs(t *testing.T) {
 			return []session.RegistryEntry{
 				{Cwd: a, MTime: now.Add(-2 * time.Hour)},
 				{Cwd: b, MTime: now},
-				{Cwd: a, MTime: now.Add(-time.Hour)}, // dupe, keep newest
-				{Cwd: "", MTime: now},                // skip empty cwd
-				{Cwd: "/does/not/exist", MTime: now}, // skip missing
+				{Cwd: c, MTime: now.Add(-3 * time.Hour), Alive: false}, // ended session still counts
+				{Cwd: a, MTime: now.Add(-time.Hour)},                   // dupe, keep newest
+				{Cwd: "", MTime: now},                                  // skip empty cwd
+				{Cwd: "/does/not/exist", MTime: now},                   // skip missing
 			}
 		},
 		validate: validateHomePath,
 		limit:    10,
 	}
 	dirs := recentDirs(cfg)
-	if len(dirs) != 2 {
+	if len(dirs) != 3 {
 		t.Fatalf("rows: %+v", dirs)
 	}
-	if dirs[0].Path != b || dirs[1].Path != a {
+	if dirs[0].Path != b || dirs[1].Path != a || dirs[2].Path != c {
 		t.Errorf("order wrong: %+v", dirs)
 	}
 }
