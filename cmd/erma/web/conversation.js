@@ -312,9 +312,10 @@
     });
     rec.addEventListener('end', () => setListening(false));
     rec.addEventListener('error', (ev) => {
-      // Common: 'not-allowed' (mic denied), 'no-speech', 'aborted'. `end` fires
-      // after error, so state resets there — just surface the reason for debug.
+      // Common: 'not-allowed' (mic denied), 'no-speech', 'aborted'. Some browsers
+      // skip `end` after `error`, so reset state here too.
       console.warn('voice', ev.error);
+      setListening(false);
     });
     voiceBtn.hidden = false;
     voiceBtn.addEventListener('click', () => {
@@ -326,7 +327,8 @@
         rec.start();
         setListening(true);
       } catch (_) {
-        // start() throws if already running — ignore.
+        // start() throws InvalidStateError if already running — ignore.
+        if (_.name !== 'InvalidStateError') throw _;
       }
     });
   }
