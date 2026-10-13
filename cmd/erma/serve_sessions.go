@@ -33,9 +33,12 @@ type newSessionReq struct {
 	Dir string `json:"dir"`
 }
 
-// newSessionResp is the response body on success.
+// newSessionResp is the response body on success. PaneID is best-effort — tmux
+// -P -F '#{pane_id}' usually fills it, but a stubbed runner (tests) or an older
+// tmux may leave stdout empty, so the field is omitted when blank.
 type newSessionResp struct {
-	Dir string `json:"dir"`
+	Dir    string `json:"dir"`
+	PaneID string `json:"paneId,omitempty"`
 }
 
 func (s *server) handleRecentDirs(w http.ResponseWriter, r *http.Request) {
@@ -77,15 +80,18 @@ func (s *server) handleNewSession(w http.ResponseWriter, r *http.Request) {
 	if runner == nil {
 		runner = defaultCommand
 	}
-	cmd := runner("tmux", "new-window", "-d", "-c", dir, "claude")
-	if err := cmd.Run(); err != nil {
+	// -P -F '#{pane_id}' asks tmux to print the new pane's id so the client can
+	// route to it without a second poll. Still fixed argv — no shell.
+	cmd := runner("tmux", "new-window", "-d", "-P", "-F", "#{pane_id}", "-c", dir, "claude")
+	out, err := cmd.Output()
+	if err != nil {
 		http.Error(w, "tmux: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(newSessionResp{Dir: dir})
+	_ = json.NewEncoder(w).Encode(newSessionResp{Dir: dir, PaneID: strings.TrimSpace(string(out))})
 }
 
 // otherPane is the on-the-wire shape of GET /api/panes/other.
@@ -120,6 +126,9 @@ var defaultOtherPanesSource otherPanesSource = func() string {
 
 // parseOtherPanes decodes the tab-separated list-panes output into the API
 // shape the front-end consumes. One malformed line is skipped, not fatal.
+// Claude rows are dropped here as defense in depth: tmux's -f filter is the
+// primary guard, but AC #5 is an "only vim and bash" guarantee — a filter
+// miss or an edge-case tmux build must not leak a claude row to the client.
 func parseOtherPanes(out string) []otherPane {
 	var rows []otherPane
 	for _, line := range strings.Split(out, "\n") {
@@ -127,15 +136,19 @@ func parseOtherPanes(out string) []otherPane {
 		if len(c) < 7 || c[0] == "" {
 			continue
 		}
+		cmd := strings.TrimSpace(c[4])
+		if cmd == "claude" {
+			continue
+		}
 		title := strings.TrimSpace(c[6])
 		if title == "" {
-			title = strings.TrimSpace(c[4])
+			title = cmd
 		}
 		rows = append(rows, otherPane{
 			PaneID:   c[0],
 			Location: fmt.Sprintf("%s:%s:%s", c[1], c[2], c[3]),
 			Title:    title,
-			Command:  strings.TrimSpace(c[4]),
+			Command:  cmd,
 			Path:     strings.TrimSpace(c[5]),
 		})
 	}

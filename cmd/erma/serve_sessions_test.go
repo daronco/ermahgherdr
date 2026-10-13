@@ -58,7 +58,7 @@ func TestNewSessionHappyPath(t *testing.T) {
 		t.Fatalf("want 1 tmux call, got %d: %+v", len(*calls), *calls)
 	}
 	argv := (*calls)[0]
-	want := []string{"tmux", "new-window", "-d", "-c", allowed, "claude"}
+	want := []string{"tmux", "new-window", "-d", "-P", "-F", "#{pane_id}", "-c", allowed, "claude"}
 	if len(argv) != len(want) {
 		t.Fatalf("argv: got %+v, want %+v", argv, want)
 	}
@@ -222,9 +222,9 @@ func TestParseOtherPanes(t *testing.T) {
 
 func TestOtherPanesHandlerFiltersClaude(t *testing.T) {
 	srv := newServer(serveFlags{tailscaleLogin: "ok@example.com"})
-	// The default tmux source would already filter claude; emulate that here
-	// to verify the handler itself returns only non-Claude rows, and tolerate
-	// a stray claude row the filter missed (defense in depth).
+	// tmux's -f filter is the primary guard; emulate a stray claude row the
+	// filter missed to pin the Go-side defense-in-depth drop that AC #5's
+	// "only" guarantee requires.
 	srv.conv.otherPanes = func() string {
 		return strings.Join([]string{
 			"%1\t0\t1\t0\tvim\t/tmp\tedit.go",
@@ -246,11 +246,11 @@ func TestOtherPanesHandlerFiltersClaude(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// The handler trusts list-panes's -f filter. The claude row above
-	// documents that a stray row would still show up — the filter is tmux's
-	// job, not a second scan in Go. Verify the two legit rows made it through.
 	foundVim, foundBash := false, false
 	for _, r := range got.Panes {
+		if r.Command == "claude" {
+			t.Errorf("claude row leaked past the Go-side filter: %+v", r)
+		}
 		if r.Command == "vim" && r.PaneID == "%1" {
 			foundVim = true
 		}
