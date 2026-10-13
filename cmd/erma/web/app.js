@@ -15,6 +15,7 @@
   const otherGroupEl = document.getElementById('other-group');
   const otherToggleEl = document.getElementById('other-toggle');
   const otherListEl = document.getElementById('other-list');
+  const otherHintEl = document.getElementById('other-hint');
   const otherCountEl = document.getElementById('other-count');
   const newBtn = document.getElementById('new-session');
   const sheetEl = document.getElementById('new-sheet');
@@ -212,8 +213,8 @@
   //
   // The group is collapsed by default and populated from /api/panes/other. We
   // refresh it on open and every 5s while expanded — the main SSE stream only
-  // carries Claude rows, and tapping an entry routes to the terminal view
-  // owned by issue #8 under /pane.html?pane=<id>.
+  // carries Claude rows. The rows are read-only: there is no pane view yet, and
+  // nothing here writes to a non-Claude pane.
   let otherTimer = null;
   let otherExpanded = false;
 
@@ -230,6 +231,7 @@
         otherExpanded = false;
         otherToggleEl.setAttribute('aria-expanded', 'false');
         otherListEl.hidden = true;
+        otherHintEl.hidden = true;
         otherToggleEl.classList.remove('open');
         if (otherTimer) {
           clearInterval(otherTimer);
@@ -256,9 +258,6 @@
       li.appendChild(name);
       li.appendChild(meta);
       li.appendChild(path);
-      li.addEventListener('click', () => {
-        location.href = '/pane.html?pane=' + encodeURIComponent(p.paneId);
-      });
       frag.appendChild(li);
     }
     otherListEl.appendChild(frag);
@@ -279,6 +278,7 @@
     otherExpanded = !otherExpanded;
     otherToggleEl.setAttribute('aria-expanded', String(otherExpanded));
     otherListEl.hidden = !otherExpanded;
+    otherHintEl.hidden = !otherExpanded;
     otherToggleEl.classList.toggle('open', otherExpanded);
     if (otherExpanded) {
       fetchOtherPanes();

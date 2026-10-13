@@ -317,9 +317,8 @@ body.state-urgent .topbar { background: #241a2e; }
   display: grid; grid-template-columns: 1fr auto; column-gap: 10px;
   padding: 8px 10px; background: var(--row-idle);
   border-radius: 6px; border-left: 3px solid var(--meta);
-  cursor: pointer;
 }
-.other-row:active { filter: brightness(1.1); }
+.other-hint { color: var(--meta); font-size: 12px; margin: 6px 2px 0; }
 .other-row .other-name { color: var(--fg); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .other-row .other-meta {
   color: var(--calm); font-size: 12px; font-variant-numeric: tabular-nums; justify-self: end;

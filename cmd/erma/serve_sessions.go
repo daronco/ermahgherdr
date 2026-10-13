@@ -4,8 +4,8 @@
 // tmux. The command is fixed and goes on tmux's own argv — never through a
 // shell — so a payload that tries to carry `; rm -rf ~` as the directory still
 // lands as a literal -c argument. GET /api/panes/other returns every pane the
-// user has that is NOT running claude so the sidebar can route to the terminal
-// view (#8) for them.
+// user has that is NOT running claude, for a read-only group in the sidebar;
+// no route writes to those panes.
 package main
 
 import (
