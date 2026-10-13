@@ -63,6 +63,13 @@ type convHub struct {
 	paneResolver func() map[string]string
 	tmux         tmuxRunner
 	mark         func(pane string)
+	// command is the launcher POST /api/sessions uses to spawn tmux. The default
+	// is exec.Command; tests swap in a recorder so cmd.Args can be asserted
+	// without a real tmux binary. nil = defaultCommand.
+	command commandRunner
+	// otherPanes is the TmuxOut call GET /api/panes/other reaches for. nil =
+	// defaultOtherPanesSource.
+	otherPanes otherPanesSource
 }
 
 // livePanes: pane → sid for the Claude panes the hub last discovered. The raw
