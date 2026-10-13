@@ -178,8 +178,23 @@ Under the snapshot sits a phone key bar — the keys an Android soft keyboard ca
 
 Allowlisted keys:
 
-- Navigation and editing: `Escape`, `Tab`, `Up`, `Down`, `Left`, `Right`, `Enter`, `BSpace`.
-- Shell Ctrl combos: `C-a`, `C-e`, `C-u`, `C-w`, `C-l`, `C-r`, `C-z`, `C-d`, `C-c`.
+| Key | Purpose |
+|---|---|
+| `Escape` | Dismiss modal / leave current mode |
+| `Tab` | Autocomplete / next field |
+| `Up`, `Down` | History / list navigation |
+| `Left`, `Right` | Cursor movement |
+| `Enter` | Submit / newline |
+| `BSpace` | Backspace |
+| `C-a` | Beginning of line |
+| `C-e` | End of line |
+| `C-u` | Clear to beginning of line |
+| `C-w` | Delete word back |
+| `C-l` | Clear screen |
+| `C-r` | Reverse history search |
+| `C-z` | Suspend foreground job |
+| `C-d` | EOF / delete char forward |
+| `C-c` | Interrupt |
 
 No PTY, no WebSocket, no batched key endpoint — one HTTP request per keystroke, every one through the same allowlist. `POST /keys` reuses the Conversation tab's gates: Origin match against the request's own Host, the per-session CSRF token, and a sid that resolves to a live Claude pane.
 
