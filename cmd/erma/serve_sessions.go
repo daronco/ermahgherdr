@@ -26,9 +26,9 @@ type commandRunner func(name string, argv ...string) *exec.Cmd
 
 var defaultCommand commandRunner = exec.Command
 
-// newSessionReq is the JSON body of POST /api/sessions. Only `dir` is honored —
-// a client-supplied command is deliberately ignored and left for the acceptance
-// tests to pin.
+// newSessionReq is the JSON body of POST /api/sessions. Only `dir` is honored
+// (empty: the configured default directory) — a client-supplied command is
+// deliberately ignored and left for the acceptance tests to pin.
 type newSessionReq struct {
 	Dir string `json:"dir"`
 }
@@ -54,10 +54,12 @@ func (s *server) handleRecentDirs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Erma-CSRF", token)
+	defDir, _ := resolveNewSessionDir(s.flags.newSessionDir)
 	_ = json.NewEncoder(w).Encode(struct {
-		Csrf string      `json:"csrf"` // required as X-Erma-CSRF by POST /api/sessions
-		Dirs []recentDir `json:"dirs"`
-	}{token, dirs})
+		Csrf    string      `json:"csrf"`    // required as X-Erma-CSRF by POST /api/sessions
+		Default string      `json:"default"` // where a session opens when no dir is sent
+		Dirs    []recentDir `json:"dirs"`
+	}{token, defDir, dirs})
 }
 
 func (s *server) handleNewSession(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +77,13 @@ func (s *server) handleNewSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	dir, err := validateHomePath(body.Dir)
+	var dir string
+	var err error
+	if strings.TrimSpace(body.Dir) == "" {
+		dir, err = resolveNewSessionDir(s.flags.newSessionDir)
+	} else {
+		dir, err = validateHomePath(body.Dir)
+	}
 	if err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return

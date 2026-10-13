@@ -143,7 +143,6 @@ func TestNewSessionRejectsBadPaths(t *testing.T) {
 		{"parent escape", allowed + "/../../../.."},
 		{"outside home", parent},
 		{"missing", filepath.Join(home, "does-not-exist")},
-		{"empty", ""},
 		{"metachar semicolon", allowed + "; rm -rf /"},
 		{"metachar backtick", allowed + "`id`"},
 		{"metachar dollar", allowed + "$(id)"},
@@ -378,5 +377,62 @@ func TestNewSessionRequiresCSRF(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Errorf("tmux invoked without a valid CSRF token: %+v", *calls)
+	}
+}
+
+// With no dir, a session opens in the configured default (a leading ~ is the
+// home directory), and in the home directory when that default does not exist.
+func TestNewSessionDefaultDir(t *testing.T) {
+	srv, calls, _ := mkSessionsServer(t)
+	home := os.Getenv("HOME")
+	open := func(configured string) string {
+		t.Helper()
+		*calls = (*calls)[:0]
+		srv.flags.newSessionDir = configured
+		r := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{"dir":""}`))
+		r.Header.Set(headerLogin, "ok@example.com")
+		r.Header.Set("Origin", "http://"+r.Host)
+		r.Header.Set("X-Erma-CSRF", srv.conv.newSessionToken())
+		w := httptest.NewRecorder()
+		srv.mux().ServeHTTP(w, r)
+		if w.Code != http.StatusOK || len(*calls) != 1 {
+			t.Fatalf("default dir %q: got %d, calls %+v", configured, w.Code, *calls)
+		}
+		argv := (*calls)[0]
+		return argv[len(argv)-2] // the -c argument
+	}
+
+	if got := open(""); got != home {
+		t.Errorf("no workbench yet: opened in %q, want the home fallback %q", got, home)
+	}
+	workbench := filepath.Join(home, "dev", "workbench")
+	if err := os.MkdirAll(workbench, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := open(""); got != workbench {
+		t.Errorf("built-in default: opened in %q, want %q", got, workbench)
+	}
+	if got := open("~/projects/foo"); got != filepath.Join(home, "projects", "foo") {
+		t.Errorf("override: opened in %q", got)
+	}
+	if got := open("~/nope"); got != home {
+		t.Errorf("missing override: opened in %q, want the home fallback", got)
+	}
+	if got := open("/etc"); got != home {
+		t.Errorf("override outside home: opened in %q, want the home fallback", got)
+	}
+}
+
+func TestParseServeFlagsNewSessionDir(t *testing.T) {
+	t.Setenv("ERMA_NEW_SESSION_DIR", "")
+	if sf, _ := parseServeFlags(nil, nil); sf.newSessionDir != "~/dev/workbench" {
+		t.Errorf("default = %q", sf.newSessionDir)
+	}
+	t.Setenv("ERMA_NEW_SESSION_DIR", "~/elsewhere")
+	if sf, _ := parseServeFlags(nil, nil); sf.newSessionDir != "~/elsewhere" {
+		t.Errorf("env = %q", sf.newSessionDir)
+	}
+	if sf, _ := parseServeFlags([]string{"--new-session-dir", "~/flag"}, nil); sf.newSessionDir != "~/flag" {
+		t.Errorf("flag = %q", sf.newSessionDir)
 	}
 }

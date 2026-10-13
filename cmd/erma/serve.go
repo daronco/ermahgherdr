@@ -89,6 +89,7 @@ type serveFlags struct {
 	tailscaleLogin     string
 	insecureNonLoopbck bool
 	devSkipAuth        bool
+	newSessionDir      string // where POST /api/sessions opens when no dir is given
 }
 
 // defaultServeFlags: a stable base other callers (tests included) can tweak.
@@ -114,6 +115,12 @@ func parseServeFlags(args []string, w *os.File) (serveFlags, error) {
 		"allow binding to a non-loopback address (DANGEROUS: the port is open to anyone who can reach it).")
 	fs.BoolVar(&sf.devSkipAuth, "dev-skip-auth", false,
 		"bypass Tailscale identity auth. Only for local development.")
+	newDir := os.Getenv("ERMA_NEW_SESSION_DIR")
+	if newDir == "" {
+		newDir = defaultNewSessionDir
+	}
+	fs.StringVar(&sf.newSessionDir, "new-session-dir", newDir,
+		"directory a new session opens in when none is picked (also from $ERMA_NEW_SESSION_DIR); a leading ~ is the home directory, and the home directory itself is used when it does not exist.")
 	if err := fs.Parse(args); err != nil {
 		return sf, err
 	}

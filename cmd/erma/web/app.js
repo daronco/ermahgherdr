@@ -339,6 +339,8 @@
       if (!res.ok) return;
       const body = await res.json();
       newSessionCsrf = res.headers.get('X-Erma-CSRF') || body.csrf || newSessionCsrf;
+      // Start from the server's default directory; the user can still edit it.
+      if (!newDirInput.value && body.default) newDirInput.value = body.default;
       const dirs = Array.isArray(body.dirs) ? body.dirs : [];
       recentEmptyEl.hidden = dirs.length > 0;
       const frag = document.createDocumentFragment();

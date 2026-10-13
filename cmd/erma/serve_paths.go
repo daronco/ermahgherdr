@@ -82,3 +82,30 @@ func (v homePathValidator) validate(p string) (string, error) {
 	}
 	return clean, nil
 }
+
+// defaultNewSessionDir: where a new session opens when the client names no
+// directory, unless --new-session-dir / $ERMA_NEW_SESSION_DIR says otherwise.
+const defaultNewSessionDir = "~/dev/workbench"
+
+// resolveNewSessionDir expands a leading ~ against the home directory and
+// validates the result like any client path. When it does not pass — most
+// often because it does not exist — the home directory itself is the default.
+func resolveNewSessionDir(configured string) (string, error) {
+	if configured == "" {
+		configured = defaultNewSessionDir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("cannot resolve home directory")
+	}
+	p := configured
+	if p == "~" {
+		p = home
+	} else if strings.HasPrefix(p, "~/") {
+		p = filepath.Join(home, p[2:])
+	}
+	if dir, err := validateHomePath(p); err == nil {
+		return dir, nil
+	}
+	return validateHomePath(home)
+}
