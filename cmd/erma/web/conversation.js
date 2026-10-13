@@ -288,24 +288,34 @@
     });
   });
 
-  // Chrome / Edge voice-to-textarea. Spec: no server-side STT.
+  // Chrome / Edge voice-to-textarea. Spec: no server-side STT, pt-BR default.
+  // Dictation lands in the textarea; nothing is sent until the user taps Send.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
     const rec = new SR();
     rec.continuous = false;
     rec.interimResults = false;
-    rec.lang = navigator.language || 'en-US';
+    rec.lang = 'pt-BR'; // hardcoded for this project
     let listening = false;
+    const setListening = (on) => {
+      listening = on;
+      voiceBtn.classList.toggle('listening', on);
+      voiceBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
     rec.addEventListener('result', (ev) => {
       let text = '';
       for (const r of ev.results) text += r[0].transcript;
+      if (!text) return;
       if (replyEl.value && !replyEl.value.endsWith(' ')) replyEl.value += ' ';
       replyEl.value += text;
       replyEl.focus();
     });
-    rec.addEventListener('end', () => {
-      listening = false;
-      voiceBtn.classList.remove('listening');
+    rec.addEventListener('end', () => setListening(false));
+    rec.addEventListener('error', (ev) => {
+      // Common: 'not-allowed' (mic denied), 'no-speech', 'aborted'. Some browsers
+      // skip `end` after `error`, so reset state here too.
+      console.warn('voice', ev.error);
+      setListening(false);
     });
     voiceBtn.hidden = false;
     voiceBtn.addEventListener('click', () => {
@@ -315,10 +325,10 @@
       }
       try {
         rec.start();
-        listening = true;
-        voiceBtn.classList.add('listening');
+        setListening(true);
       } catch (_) {
-        // start() throws if already running — ignore.
+        // start() throws InvalidStateError if already running — ignore.
+        if (_.name !== 'InvalidStateError') throw _;
       }
     });
   }
