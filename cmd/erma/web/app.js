@@ -63,6 +63,12 @@
     li.appendChild(body);
     li.appendChild(marks);
     li.appendChild(badge);
+    // Row tap opens the conversation view. The whole row is one hit target
+    // (the <li>, not an <a>) so taps on marks or badge count too.
+    li.addEventListener('click', () => {
+      const id = li.dataset.id;
+      if (id) location.href = '/conversation.html?id=' + encodeURIComponent(id);
+    });
     n = { li, glyph, name, meta, marks, badge, ctx: null };
     nodes.set(s.pane, n);
     return n;
@@ -74,6 +80,7 @@
     if (s.marks === 'paused') classes.push('paused');
     if (s.marks === 'prio') classes.push('prio');
     n.li.className = classes.join(' ');
+    n.li.dataset.id = s.id || s.pane;
     n.glyph.textContent = s.dai ? '📡' : GLYPH[s.state] || '○';
     n.name.textContent = s.name || '(no name)';
     n.meta.textContent = metaLine(s);

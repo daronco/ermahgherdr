@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -39,15 +40,16 @@ const servePollInterval = 600 * time.Millisecond
 // what the PWA actually needs today — enough to render the list the bar paints.
 // Keep the field names in lockstep with the client (cmd/erma/web/app.js).
 type apiSession struct {
-	ID    string `json:"id"`    // sessionId, or the pane id when no registry file exists yet
-	Pane  string `json:"pane"`  // tmux pane id (%42)
-	Name  string `json:"name"`  // human-readable label
-	State string `json:"state"` // idle | done | proc | urgent
-	Since int64  `json:"since"` // unix seconds the state has held
-	Marks string `json:"marks"` // "" | paused | prio
-	Sub   int    `json:"sub"`   // subagents under this session
-	Ctx   string `json:"ctx"`   // @erma_ctx_used (percent as string), may be empty
-	Dai   bool   `json:"dai"`   // the dai-live pinned session
+	ID     string `json:"id"`               // sessionId, or the pane id when no registry file exists yet
+	Pane   string `json:"pane"`             // tmux pane id (%42)
+	Name   string `json:"name"`             // human-readable label
+	State  string `json:"state"`            // idle | done | proc | urgent
+	Since  int64  `json:"since"`            // unix seconds the state has held
+	Marks  string `json:"marks"`            // "" | paused | prio
+	Sub    int    `json:"sub"`              // subagents under this session
+	Ctx    string `json:"ctx"`              // @erma_ctx_used (percent as string), may be empty
+	Dai    bool   `json:"dai"`              // the dai-live pinned session
+	Prompt string `json:"prompt,omitempty"` // the pending permission question, parsed off the pane's screen
 }
 
 // stateString: the state enum, in the exact spelling the front-end switches on.
@@ -76,6 +78,7 @@ func toAPI(s session.Session) apiSession {
 		ID: id, Pane: s.Pane, Name: s.Name,
 		State: stateString(s.St), Since: s.Since,
 		Marks: s.Flag, Sub: s.Sub, Ctx: s.Ctx, Dai: s.Dai,
+		Prompt: s.Prompt,
 	}
 }
 
@@ -182,6 +185,18 @@ func serveOn(ctx context.Context, ln net.Listener, srv *server) error {
 	}
 }
 
+// pathHasDotDot: true when any path segment is literally "..". A single "." or
+// an embedded ".." inside a longer segment (e.g. "foo..bar") does NOT count —
+// those are not traversal.
+func pathHasDotDot(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // validateAddr: a non-loopback bind requires the explicit override. Hostnames
 // that resolve to multiple addresses would also need checking in principle, but
 // this subcommand is only ever bound to a literal IP in production — the laptop
@@ -214,12 +229,15 @@ func validateAddr(addr string, allowNonLoopback bool) error {
 type server struct {
 	flags serveFlags
 	hub   *sseHub
+	conv  *convHub
 }
 
 func newServer(sf serveFlags) *server {
+	hub := newSSEHub()
 	return &server{
 		flags: sf,
-		hub:   newSSEHub(),
+		hub:   hub,
+		conv:  newConvHub(hub),
 	}
 }
 
@@ -230,6 +248,7 @@ func (s *server) mux() http.Handler {
 	}
 	m := http.NewServeMux()
 	m.HandleFunc("/api/sessions", s.handleSessions)
+	m.HandleFunc("/api/sessions/", s.serveSessionRoute)
 	m.HandleFunc("/api/stream", s.handleStream)
 	m.Handle("/", http.FileServer(http.FS(root)))
 	// Go's built-in table has no .webmanifest entry and would sniff it as text/plain.
@@ -253,6 +272,13 @@ func (s *server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(headerFunnel) != "" {
 			http.Error(w, "forbidden: Tailscale Funnel requests are not accepted", http.StatusForbidden)
+			return
+		}
+		// Hard-reject any API path that carries a `..` segment, before the
+		// mux's own cleanPath turns it into a 301 to a different URL. The spec
+		// requires 404 for traversal attempts on /api/sessions/{id}/...
+		if strings.HasPrefix(r.URL.Path, "/api/") && pathHasDotDot(r.URL.Path) {
+			http.NotFound(w, r)
 			return
 		}
 		if s.flags.devSkipAuth {
