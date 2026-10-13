@@ -51,6 +51,13 @@ func (v homePathValidator) validate(p string) (string, error) {
 	if !filepath.IsAbs(clean) {
 		return "", errors.New("path is not absolute")
 	}
+	// Resolve the input too, not just home: otherwise /home/alice/link ->
+	// /etc would pass the prefix check and tmux would open /etc. On error
+	// (e.g. the path does not exist) leave clean as-is and let stat below
+	// surface a specific reason.
+	if resolved, err := v.evalSymlink(clean); err == nil {
+		clean = filepath.Clean(resolved)
+	}
 	home, err := v.homeDir()
 	if err != nil || home == "" {
 		return "", errors.New("cannot resolve home directory")

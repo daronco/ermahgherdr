@@ -116,8 +116,13 @@ func TestValidateHomePathHomeResolveFailure(t *testing.T) {
 // A symlinked home still contains paths given under its canonical name.
 func TestValidateHomePathFollowsSymlinks(t *testing.T) {
 	v := homePathValidator{
-		homeDir:     func() (string, error) { return "/home/alice", nil },
-		evalSymlink: func(p string) (string, error) { return "/mnt/users/alice", nil },
+		homeDir: func() (string, error) { return "/home/alice", nil },
+		evalSymlink: func(p string) (string, error) {
+			if p == "/home/alice" {
+				return "/mnt/users/alice", nil
+			}
+			return p, nil
+		},
 		stat: func(p string) (os.FileInfo, error) {
 			if p == "/mnt/users/alice/projects/foo" {
 				return fakeFileInfo{dir: true}, nil
@@ -137,5 +142,33 @@ func TestValidateHomePathFollowsSymlinks(t *testing.T) {
 	// the resolved home.
 	if _, err := v.validate("/home/alice/projects/foo"); err == nil {
 		t.Errorf("validate on pre-resolve name should fail")
+	}
+}
+
+// An input path that is itself a symlink pointing outside $HOME must be
+// rejected: filepath.Clean does not follow symlinks, so without resolving
+// the input side the prefix check would pass and tmux would open the target.
+func TestValidateHomePathRejectsInputSymlinkOutsideHome(t *testing.T) {
+	v := homePathValidator{
+		homeDir: func() (string, error) { return "/home/alice", nil },
+		evalSymlink: func(p string) (string, error) {
+			if p == "/home/alice/link" {
+				return "/etc", nil
+			}
+			return p, nil
+		},
+		stat: func(p string) (os.FileInfo, error) {
+			if p == "/etc" || p == "/home/alice/link" {
+				return fakeFileInfo{dir: true}, nil
+			}
+			return nil, os.ErrNotExist
+		},
+	}
+	_, err := v.validate("/home/alice/link")
+	if err == nil {
+		t.Fatalf("expected rejection for input symlink pointing outside $HOME")
+	}
+	if !strings.Contains(err.Error(), "not inside") {
+		t.Errorf("err = %q, want contains 'not inside'", err.Error())
 	}
 }

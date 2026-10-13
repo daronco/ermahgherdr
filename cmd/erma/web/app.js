@@ -221,8 +221,25 @@
     otherListEl.innerHTML = '';
     const list = Array.isArray(panes) ? panes : [];
     otherCountEl.textContent = String(list.length);
-    otherGroupEl.hidden = list.length === 0;
-    if (list.length === 0) return;
+    if (list.length === 0) {
+      // If the group is currently expanded (user clicked it, then every
+      // non-Claude pane went away), collapse it and stop the poll before
+      // hiding — otherwise aria-expanded stays "true" on a hidden element
+      // and otherTimer keeps firing against an empty list.
+      if (otherExpanded) {
+        otherExpanded = false;
+        otherToggleEl.setAttribute('aria-expanded', 'false');
+        otherListEl.hidden = true;
+        otherToggleEl.classList.remove('open');
+        if (otherTimer) {
+          clearInterval(otherTimer);
+          otherTimer = null;
+        }
+      }
+      otherGroupEl.hidden = true;
+      return;
+    }
+    otherGroupEl.hidden = false;
     const frag = document.createDocumentFragment();
     for (const p of list) {
       const li = document.createElement('li');
@@ -279,18 +296,36 @@
 
   // ---------- New session sheet ----------
 
+  let lastFocusBeforeSheet = null;
+
   function openSheet() {
+    lastFocusBeforeSheet = document.activeElement;
     sheetEl.hidden = false;
     sheetEl.setAttribute('aria-hidden', 'false');
     newErrorEl.hidden = true;
     newDirInput.value = '';
     loadRecentDirs();
-    setTimeout(() => newDirInput.focus(), 50);
+    // hidden=false applies synchronously; focus on the next frame once layout
+    // has settled, rather than an arbitrary setTimeout delay.
+    requestAnimationFrame(() => newDirInput.focus());
   }
 
   function closeSheet() {
     sheetEl.hidden = true;
     sheetEl.setAttribute('aria-hidden', 'true');
+    if (lastFocusBeforeSheet && typeof lastFocusBeforeSheet.focus === 'function') {
+      lastFocusBeforeSheet.focus();
+    }
+    lastFocusBeforeSheet = null;
+  }
+
+  // Focus trap: keep Tab/Shift-Tab inside the sheet while it's open.
+  function sheetFocusables() {
+    const sel = 'a[href], button:not([disabled]), input:not([disabled]), ' +
+      'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const body = sheetEl.querySelector('.sheet-body');
+    if (!body) return [];
+    return Array.from(body.querySelectorAll(sel)).filter((el) => !el.hidden);
   }
 
   async function loadRecentDirs() {
@@ -357,6 +392,23 @@
     });
   }
   document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && !sheetEl.hidden) closeSheet();
+    if (sheetEl.hidden) return;
+    if (ev.key === 'Escape') {
+      closeSheet();
+      return;
+    }
+    if (ev.key !== 'Tab') return;
+    const nodes = sheetFocusables();
+    if (nodes.length === 0) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    const active = document.activeElement;
+    if (ev.shiftKey && (active === first || !sheetEl.contains(active))) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && active === last) {
+      ev.preventDefault();
+      first.focus();
+    }
   });
 })();

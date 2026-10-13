@@ -55,10 +55,7 @@ func (s *server) handleRecentDirs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleNewSession(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	// Method is already gated by handleSessionsRoot.
 	if !originMatches(r) {
 		http.Error(w, "forbidden: Origin mismatch", http.StatusForbidden)
 		return

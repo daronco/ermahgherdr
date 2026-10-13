@@ -38,6 +38,11 @@ func defaultRecentDirsConfig() recentDirsConfig {
 // cwd that no longer passes validateHomePath (missing on disk, outside $HOME)
 // is dropped silently — this list is only ever shown as a suggestion. Entries
 // with no cwd field are skipped rather than guessed at.
+//
+// Only directories of *currently running* claude sessions appear here:
+// session.Registry drops rows whose pid is gone, so a directory the user
+// visited yesterday and closed is not resurfaced. The registry file is the
+// liveness signal; we deliberately do not keep a separate history on disk.
 func recentDirs(cfg recentDirsConfig) []recentDir {
 	rows := cfg.registry()
 	sort.SliceStable(rows, func(i, j int) bool {
