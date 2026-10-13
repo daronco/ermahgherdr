@@ -12,6 +12,19 @@
   const countsEl = document.getElementById('counts');
   const connEl = document.getElementById('conn');
 
+  const otherGroupEl = document.getElementById('other-group');
+  const otherToggleEl = document.getElementById('other-toggle');
+  const otherListEl = document.getElementById('other-list');
+  const otherCountEl = document.getElementById('other-count');
+  const newBtn = document.getElementById('new-session');
+  const sheetEl = document.getElementById('new-sheet');
+  const recentListEl = document.getElementById('recent-list');
+  const recentEmptyEl = document.getElementById('recent-empty');
+  const newForm = document.getElementById('new-form');
+  const newDirInput = document.getElementById('new-dir');
+  const newErrorEl = document.getElementById('new-error');
+  const newSubmitBtn = document.getElementById('new-submit');
+
   // State → glyph, kept in lockstep with the bar.
   const GLYPH = { urgent: '●', done: '✓', proc: '…', idle: '○' };
 
@@ -194,4 +207,156 @@
   }
 
   connect();
+
+  // ---------- Other panes group ----------
+  //
+  // The group is collapsed by default and populated from /api/panes/other. We
+  // refresh it on open and every 5s while expanded — the main SSE stream only
+  // carries Claude rows, and tapping an entry routes to the terminal view
+  // owned by issue #8 under /pane.html?pane=<id>.
+  let otherTimer = null;
+  let otherExpanded = false;
+
+  function renderOtherPanes(panes) {
+    otherListEl.innerHTML = '';
+    const list = Array.isArray(panes) ? panes : [];
+    otherCountEl.textContent = String(list.length);
+    otherGroupEl.hidden = list.length === 0;
+    if (list.length === 0) return;
+    const frag = document.createDocumentFragment();
+    for (const p of list) {
+      const li = document.createElement('li');
+      li.className = 'other-row';
+      const name = document.createElement('span');
+      name.className = 'other-name';
+      name.textContent = p.title || p.command || p.paneId;
+      const meta = document.createElement('span');
+      meta.className = 'other-meta';
+      meta.textContent = `${p.command || ''} · ${p.location || ''}`;
+      const path = document.createElement('span');
+      path.className = 'other-path';
+      path.textContent = p.path || '';
+      li.appendChild(name);
+      li.appendChild(meta);
+      li.appendChild(path);
+      li.addEventListener('click', () => {
+        location.href = '/pane.html?pane=' + encodeURIComponent(p.paneId);
+      });
+      frag.appendChild(li);
+    }
+    otherListEl.appendChild(frag);
+  }
+
+  async function fetchOtherPanes() {
+    try {
+      const res = await fetch('/api/panes/other', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const body = await res.json();
+      renderOtherPanes(body.panes || []);
+    } catch (e) {
+      console.warn('other panes', e);
+    }
+  }
+
+  otherToggleEl.addEventListener('click', () => {
+    otherExpanded = !otherExpanded;
+    otherToggleEl.setAttribute('aria-expanded', String(otherExpanded));
+    otherListEl.hidden = !otherExpanded;
+    otherToggleEl.classList.toggle('open', otherExpanded);
+    if (otherExpanded) {
+      fetchOtherPanes();
+      otherTimer = setInterval(fetchOtherPanes, 5000);
+    } else if (otherTimer) {
+      clearInterval(otherTimer);
+      otherTimer = null;
+    }
+  });
+
+  // Always keep the count fresh so the group reveals itself when something
+  // non-Claude shows up, even while collapsed.
+  fetchOtherPanes();
+  setInterval(() => { if (!otherExpanded) fetchOtherPanes(); }, 15000);
+
+  // ---------- New session sheet ----------
+
+  function openSheet() {
+    sheetEl.hidden = false;
+    sheetEl.setAttribute('aria-hidden', 'false');
+    newErrorEl.hidden = true;
+    newDirInput.value = '';
+    loadRecentDirs();
+    setTimeout(() => newDirInput.focus(), 50);
+  }
+
+  function closeSheet() {
+    sheetEl.hidden = true;
+    sheetEl.setAttribute('aria-hidden', 'true');
+  }
+
+  async function loadRecentDirs() {
+    recentListEl.innerHTML = '';
+    try {
+      const res = await fetch('/api/dirs/recent', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const body = await res.json();
+      const dirs = Array.isArray(body.dirs) ? body.dirs : [];
+      recentEmptyEl.hidden = dirs.length > 0;
+      const frag = document.createDocumentFragment();
+      for (const d of dirs) {
+        const li = document.createElement('li');
+        li.className = 'recent-row';
+        li.textContent = d.path;
+        li.addEventListener('click', () => {
+          newDirInput.value = d.path;
+          submitNewSession();
+        });
+        frag.appendChild(li);
+      }
+      recentListEl.appendChild(frag);
+    } catch (e) {
+      console.warn('recent dirs', e);
+    }
+  }
+
+  async function submitNewSession() {
+    const dir = (newDirInput.value || '').trim();
+    if (!dir) return;
+    newSubmitBtn.disabled = true;
+    newErrorEl.hidden = true;
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        newErrorEl.hidden = false;
+        newErrorEl.textContent = text || ('error ' + res.status);
+        return;
+      }
+      closeSheet();
+    } catch (e) {
+      newErrorEl.hidden = false;
+      newErrorEl.textContent = String(e && e.message || e);
+    } finally {
+      newSubmitBtn.disabled = false;
+    }
+  }
+
+  if (newBtn) newBtn.addEventListener('click', openSheet);
+  if (newForm) newForm.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    submitNewSession();
+  });
+  if (sheetEl) {
+    sheetEl.addEventListener('click', (ev) => {
+      const t = ev.target;
+      if (t && t.getAttribute && t.getAttribute('data-close') === '1') closeSheet();
+    });
+  }
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && !sheetEl.hidden) closeSheet();
+  });
 })();
