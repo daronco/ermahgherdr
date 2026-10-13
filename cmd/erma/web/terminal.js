@@ -27,9 +27,12 @@
   ];
 
   const REFRESH_MS = 500;
+  const MAX_FETCH_ERRORS = 5;
+  const KEY_ERROR_FLASH_MS = 400;
   let timer = null;
   let inFlight = false;
   let visible = false;
+  let fetchErrors = 0;
 
   function esc(ch) {
     switch (ch) {
@@ -57,8 +60,6 @@
   }
 
   function applySgr(params, state) {
-    // Empty params list means "0" (reset).
-    if (params.length === 0) params = [0];
     for (let i = 0; i < params.length; i++) {
       const n = params[i];
       if (n === 0) {
@@ -155,6 +156,19 @@
     return out;
   }
 
+  // Count consecutive failures so a dead tmux doesn't get hit at 500 ms forever.
+  // Any success resets the counter.
+  function onFetchError(label) {
+    fetchErrors++;
+    if (fetchErrors >= MAX_FETCH_ERRORS) {
+      stopPolling();
+      if (emptyEl) {
+        emptyEl.hidden = false;
+        emptyEl.textContent = 'terminal unavailable (' + label + '); polling stopped';
+      }
+    }
+  }
+
   async function fetchScreen() {
     if (inFlight) return;
     inFlight = true;
@@ -167,13 +181,16 @@
           emptyEl.hidden = false;
           emptyEl.textContent = 'terminal unavailable (' + res.status + ')';
         }
+        onFetchError(res.status);
         return;
       }
       const raw = await res.text();
       screenEl.innerHTML = ansiToHtml(raw);
       if (emptyEl) emptyEl.hidden = true;
+      fetchErrors = 0;
     } catch (e) {
       console.warn('terminal fetch', e);
+      onFetchError('network');
     } finally {
       inFlight = false;
     }
@@ -181,6 +198,7 @@
 
   function startPolling() {
     if (timer !== null) return;
+    fetchErrors = 0;
     fetchScreen();
     timer = setInterval(fetchScreen, REFRESH_MS);
   }
@@ -192,18 +210,35 @@
     }
   }
 
+  function flashError(btn) {
+    btn.classList.add('tk-error');
+    setTimeout(() => btn.classList.remove('tk-error'), KEY_ERROR_FLASH_MS);
+  }
+
+  // Returns true on 2xx, false otherwise. Caller flashes the button red on
+  // failure — the console is invisible on a phone, so a stuck Escape/C-c
+  // needs a visible signal.
   async function sendKey(token) {
     const csrf = typeof window.ermaCSRF === 'function' ? window.ermaCSRF() : '';
     if (!csrf) {
       console.warn('terminal key: no CSRF yet');
-      return;
+      return false;
     }
-    const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/keys', {
-      method: 'POST',
-      headers: { 'X-Erma-CSRF': csrf, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: token }),
-    });
-    if (!res.ok) console.warn('terminal key', token, res.status);
+    try {
+      const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/keys', {
+        method: 'POST',
+        headers: { 'X-Erma-CSRF': csrf, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: token }),
+      });
+      if (!res.ok) {
+        console.warn('terminal key', token, res.status);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.warn('terminal key', token, e);
+      return false;
+    }
   }
 
   // Button bar: one request per tap. Disable while a POST is in flight so a
@@ -214,7 +249,8 @@
       if (!token) return;
       btn.disabled = true;
       try {
-        await sendKey(token);
+        const ok = await sendKey(token);
+        if (!ok) flashError(btn);
         // Refresh sooner than the next tick to make the keystroke feel instant.
         if (visible) fetchScreen();
       } finally {

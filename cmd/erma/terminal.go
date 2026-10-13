@@ -77,13 +77,13 @@ func (s *server) handleSendKey(w http.ResponseWriter, r *http.Request, sid strin
 		http.Error(w, "forbidden: Origin mismatch", http.StatusForbidden)
 		return
 	}
+	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
+		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
+		return
+	}
 	pane, ok := s.conv.resolvePane(sid)
 	if !ok {
 		http.Error(w, "unknown session", http.StatusNotFound)
-		return
-	}
-	if !s.conv.checkToken(sid, r.Header.Get("X-Erma-CSRF")) {
-		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
 		return
 	}
 	var body keyBody

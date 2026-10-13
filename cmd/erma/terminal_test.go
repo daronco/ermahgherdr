@@ -68,11 +68,24 @@ func TestTerminalReturnsCaptureBytes(t *testing.T) {
 			t.Errorf("capture-pane missing %s: %+v", f, argv)
 		}
 	}
-	// -t must be followed by the pane id, verbatim.
-	for i := 0; i < len(argv)-1; i++ {
-		if argv[i] == "-t" && argv[i+1] != "%42" {
+	// -t must appear with the pane id as the next argv element — not as a
+	// trailing bare flag, not followed by anything else.
+	foundT := false
+	for i := 0; i < len(argv); i++ {
+		if argv[i] != "-t" {
+			continue
+		}
+		if i == len(argv)-1 {
+			t.Errorf("-t is the final argv element with no target: %+v", argv)
+			continue
+		}
+		foundT = true
+		if argv[i+1] != "%42" {
 			t.Errorf("-t target = %q, want %q", argv[i+1], "%42")
 		}
+	}
+	if !foundT {
+		t.Errorf("capture-pane missing -t <pane>: %+v", argv)
 	}
 }
 

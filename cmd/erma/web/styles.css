@@ -280,4 +280,5 @@ body.state-urgent .topbar { background: #241a2e; }
 .tk:active { filter: brightness(1.15); }
 .tk:disabled { opacity: 0.5; cursor: default; }
 .tk.tk-danger { color: #e05b57; border-color: #4a2323; }
+.tk.tk-error { border-color: #e05b57; color: #e05b57; }
 
