@@ -328,12 +328,17 @@
     return Array.from(body.querySelectorAll(sel)).filter((el) => !el.hidden);
   }
 
+  // The CSRF token POST /api/sessions requires; GET /api/dirs/recent hands it
+  // out with the list.
+  let newSessionCsrf = '';
+
   async function loadRecentDirs() {
     recentListEl.innerHTML = '';
     try {
       const res = await fetch('/api/dirs/recent', { credentials: 'same-origin' });
       if (!res.ok) return;
       const body = await res.json();
+      newSessionCsrf = res.headers.get('X-Erma-CSRF') || body.csrf || newSessionCsrf;
       const dirs = Array.isArray(body.dirs) ? body.dirs : [];
       recentEmptyEl.hidden = dirs.length > 0;
       const frag = document.createDocumentFragment();
@@ -359,10 +364,11 @@
     newSubmitBtn.disabled = true;
     newErrorEl.hidden = true;
     try {
+      if (!newSessionCsrf) await loadRecentDirs();
       const res = await fetch('/api/sessions', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Erma-CSRF': newSessionCsrf },
         body: JSON.stringify({ dir }),
       });
       if (!res.ok) {

@@ -48,6 +48,7 @@ func TestNewSessionHappyPath(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 	r.Header.Set(headerLogin, "ok@example.com")
 	r.Header.Set("Origin", "http://"+r.Host)
+	r.Header.Set("X-Erma-CSRF", srv.conv.newSessionToken())
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.mux().ServeHTTP(w, r)
@@ -80,6 +81,7 @@ func TestNewSessionArgvNoShell(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 		r.Header.Set(headerLogin, "ok@example.com")
 		r.Header.Set("Origin", "http://"+r.Host)
+		r.Header.Set("X-Erma-CSRF", srv.conv.newSessionToken())
 		w := httptest.NewRecorder()
 		srv.mux().ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
@@ -109,6 +111,7 @@ func TestNewSessionIgnoresClientCommand(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 	r.Header.Set(headerLogin, "ok@example.com")
 	r.Header.Set("Origin", "http://"+r.Host)
+	r.Header.Set("X-Erma-CSRF", srv.conv.newSessionToken())
 	w := httptest.NewRecorder()
 	srv.mux().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -153,6 +156,8 @@ func TestNewSessionRejectsBadPaths(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 			r.Header.Set(headerLogin, "ok@example.com")
 			r.Header.Set("Origin", "http://"+r.Host)
+			r.Header.Set("X-Erma-CSRF", srv.conv.newSessionToken())
+			r.Header.Set("X-Erma-CSRF", srv.conv.newSessionToken())
 			w := httptest.NewRecorder()
 			srv.mux().ServeHTTP(w, r)
 			if w.Code != http.StatusBadRequest {
@@ -171,6 +176,7 @@ func TestNewSessionRequiresAuth(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 	// no Tailscale header
 	r.Header.Set("Origin", "http://"+r.Host)
+	r.Header.Set("X-Erma-CSRF", srv.conv.newSessionToken())
 	w := httptest.NewRecorder()
 	srv.mux().ServeHTTP(w, r)
 	if w.Code != http.StatusUnauthorized {
@@ -337,5 +343,40 @@ func TestRecentDirsRequiresAuth(t *testing.T) {
 	srv.mux().ServeHTTP(w, r)
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("got %d, want 401", w.Code)
+	}
+}
+
+// POST /api/sessions needs the CSRF token GET /api/dirs/recent hands out, like
+// every other write route; without it (or with a wrong one) nothing launches.
+func TestNewSessionRequiresCSRF(t *testing.T) {
+	srv, calls, allowed := mkSessionsServer(t)
+	r := httptest.NewRequest(http.MethodGet, "/api/dirs/recent", nil)
+	r.Header.Set(headerLogin, "ok@example.com")
+	w := httptest.NewRecorder()
+	srv.mux().ServeHTTP(w, r)
+	tok := w.Header().Get("X-Erma-CSRF")
+	if tok == "" || tok != srv.conv.newSessionToken() {
+		t.Fatalf("GET /api/dirs/recent token = %q", tok)
+	}
+	body, _ := json.Marshal(newSessionReq{Dir: allowed})
+	for _, c := range []struct{ name, token string }{
+		{"missing", ""},
+		{"wrong", strings.Repeat("0", len(tok))},
+		{"another sid's", srv.conv.tokenFor("s1")},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
+		r.Header.Set(headerLogin, "ok@example.com")
+		r.Header.Set("Origin", "http://"+r.Host)
+		if c.token != "" {
+			r.Header.Set("X-Erma-CSRF", c.token)
+		}
+		w := httptest.NewRecorder()
+		srv.mux().ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s token: got %d, want 403", c.name, w.Code)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Errorf("tmux invoked without a valid CSRF token: %+v", *calls)
 	}
 }

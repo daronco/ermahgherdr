@@ -50,17 +50,24 @@ func (s *server) handleRecentDirs(w http.ResponseWriter, r *http.Request) {
 	if dirs == nil {
 		dirs = []recentDir{}
 	}
+	token := s.conv.newSessionToken()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Erma-CSRF", token)
 	_ = json.NewEncoder(w).Encode(struct {
+		Csrf string      `json:"csrf"` // required as X-Erma-CSRF by POST /api/sessions
 		Dirs []recentDir `json:"dirs"`
-	}{dirs})
+	}{token, dirs})
 }
 
 func (s *server) handleNewSession(w http.ResponseWriter, r *http.Request) {
 	// Method is already gated by handleSessionsRoot.
 	if !originMatches(r) {
 		http.Error(w, "forbidden: Origin mismatch", http.StatusForbidden)
+		return
+	}
+	if !sameToken(s.conv.newSessionToken(), r.Header.Get("X-Erma-CSRF")) {
+		http.Error(w, "forbidden: CSRF", http.StatusForbidden)
 		return
 	}
 	var body newSessionReq

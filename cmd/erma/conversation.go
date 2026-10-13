@@ -58,11 +58,14 @@ func defaultTmux(stdin io.Reader, argv ...string) error {
 //   - mark: the read-ack call. Default is session.MarkRead; a test counts
 //     invocations.
 type convHub struct {
-	mu           sync.Mutex
-	csrf         map[string]string
-	paneResolver func() map[string]string
-	tmux         tmuxRunner
-	mark         func(pane string)
+	mu   sync.Mutex
+	csrf map[string]string
+	// newSessionCSRF guards POST /api/sessions, which has no session id to key
+	// a token by; GET /api/dirs/recent hands it out with the list.
+	newSessionCSRF string
+	paneResolver   func() map[string]string
+	tmux           tmuxRunner
+	mark           func(pane string)
 	// command is the launcher POST /api/sessions uses to spawn tmux. The default
 	// is exec.Command; tests swap in a recorder so cmd.Args can be asserted
 	// without a real tmux binary. nil = defaultCommand.
@@ -107,11 +110,25 @@ func (c *convHub) tokenFor(sid string) string {
 	if t, ok := c.csrf[sid]; ok {
 		return t
 	}
-	var b [32]byte
-	_, _ = rand.Read(b[:])
-	t := hex.EncodeToString(b[:])
+	t := mintToken()
 	c.csrf[sid] = t
 	return t
+}
+
+// newSessionToken returns the new-session CSRF token, minting it on first ask.
+func (c *convHub) newSessionToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.newSessionCSRF == "" {
+		c.newSessionCSRF = mintToken()
+	}
+	return c.newSessionCSRF
+}
+
+func mintToken() string {
+	var b [32]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // pruneCSRFLocked drops csrf entries whose sid is no longer in the registry.
@@ -136,10 +153,12 @@ func (c *convHub) checkToken(sid, got string) bool {
 	c.mu.Lock()
 	want, ok := c.csrf[sid]
 	c.mu.Unlock()
-	if !ok || got == "" {
-		return false
-	}
-	if len(got) != len(want) {
+	return ok && sameToken(want, got)
+}
+
+// sameToken: constant-time compare so a timing attacker cannot peel it off.
+func sameToken(want, got string) bool {
+	if want == "" || got == "" || len(got) != len(want) {
 		return false
 	}
 	var diff byte
