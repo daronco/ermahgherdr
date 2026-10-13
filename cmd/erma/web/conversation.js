@@ -346,4 +346,30 @@
     }
     connect();
   })();
+
+  // Tab bar wiring. The Terminal tab panel owns its own polling loop in
+  // terminal.js; we only toggle visibility and emit a custom event so the
+  // other script can start/stop its interval.
+  const panels = {
+    conversation: document.getElementById('tab-conversation'),
+    terminal: document.getElementById('tab-terminal'),
+  };
+  const tabs = document.querySelectorAll('.tabs .tab');
+  function activateTab(name) {
+    for (const b of tabs) {
+      const active = b.getAttribute('data-tab') === name;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+    for (const [k, el] of Object.entries(panels)) {
+      el.hidden = k !== name;
+    }
+    document.dispatchEvent(new CustomEvent('erma:tab', {
+      detail: { name, sid: SID, csrf: () => csrf },
+    }));
+  }
+  tabs.forEach((b) => b.addEventListener('click', () => activateTab(b.getAttribute('data-tab'))));
+  // Expose a getter so terminal.js can grab the current CSRF without a
+  // module import — the serve binary ships both scripts off the same root.
+  window.ermaCSRF = () => csrf;
 })();
