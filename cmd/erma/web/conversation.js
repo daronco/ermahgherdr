@@ -295,7 +295,7 @@
     const rec = new SR();
     rec.continuous = false;
     rec.interimResults = false;
-    rec.lang = 'pt-BR';
+    rec.lang = 'pt-BR'; // hardcoded for this project
     let listening = false;
     const setListening = (on) => {
       listening = on;
