@@ -170,6 +170,34 @@ Tapping a session on the PWA opens its conversation view: the latest turns of th
 
 The hard limits are the same as the session list: **loopback-only** bind (`--insecure-non-loopback` is required to override), **Tailscale identity** on every request (static assets, API, SSE), **no public port** (`tailscale funnel` is refused on purpose). Writes to tmux (reply text, quick keys, read-ack) go through two gates — an Origin match against the request's own Host, and a per-session CSRF token minted on the conversation GET — on top of the identity header.
 
+### Terminal tab
+
+The second tab in the conversation view is a read/write terminal view of the same pane. It polls `GET /api/sessions/<sid>/terminal` roughly twice a second — a `tmux capture-pane -e -p` snapshot with SGR escapes intact — and renders it client-side: a tiny ANSI parser turns the escapes into coloured `<span>` runs over the classical 16-colour palette (SGR 0/1/22, 30–37, 39, 40–47, 49, 90–97, 100–107). Anything outside that whitelist is dropped so a crafted sequence cannot inject HTML.
+
+Under the snapshot sits a phone key bar — the keys an Android soft keyboard cannot type. Each tap `POST`s a single label to `/api/sessions/<sid>/keys`; the server looks it up in a fixed allowlist and forwards the matching tmux key name through `send-keys`. The client never names a tmux key directly: a request body carrying anything outside this set is `400`'d before any tmux call runs.
+
+Allowlisted keys:
+
+| Key | Purpose |
+|---|---|
+| `Escape` | Dismiss modal / leave current mode |
+| `Tab` | Autocomplete / next field |
+| `Up`, `Down` | History / list navigation |
+| `Left`, `Right` | Cursor movement |
+| `Enter` | Submit / newline |
+| `BSpace` | Backspace |
+| `C-a` | Beginning of line |
+| `C-e` | End of line |
+| `C-u` | Clear to beginning of line |
+| `C-w` | Delete word back |
+| `C-l` | Clear screen |
+| `C-r` | Reverse history search |
+| `C-c` | Interrupt |
+
+`C-z` and `C-d` are refused on both key routes (`/key` and `/keys`): `C-z` suspends `claude`, dropping the pane to a shell and out of the session list, and `C-d` can end it — either way remote access is lost.
+
+No PTY, no WebSocket, no batched key endpoint — one HTTP request per keystroke, every one through the same allowlist. `POST /keys` reuses the Conversation tab's gates: Origin match against the request's own Host, the per-session CSRF token, and a sid that resolves to a live Claude pane.
+
 Flags:
 
 - `--addr` — the TCP address to listen on. Defaults to `127.0.0.1:0`, picking an ephemeral loopback port. A non-loopback address is **refused** unless you also pass `--insecure-non-loopback`.

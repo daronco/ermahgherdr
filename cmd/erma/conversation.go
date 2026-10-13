@@ -45,6 +45,17 @@ func defaultTmux(stdin io.Reader, argv ...string) error {
 	return cmd.Run()
 }
 
+// tmuxOutRunner captures stdout from a tmux invocation. Kept distinct from
+// tmuxRunner because capture-pane is the only path that cares about stdout;
+// the write paths discard it. Tests swap in a stub that returns a canned
+// screen so the suite never forks tmux.
+type tmuxOutRunner func(argv ...string) ([]byte, error)
+
+// defaultTmuxOut: the real capture-pane / display-message / list-* path.
+func defaultTmuxOut(argv ...string) ([]byte, error) {
+	return exec.Command("tmux", argv...).Output()
+}
+
 // convHub: per-session state the conversation routes need across requests.
 //
 //   - csrf: a random 32-byte token per sid, cached until the server restarts.
@@ -62,6 +73,7 @@ type convHub struct {
 	csrf         map[string]string
 	paneResolver func() map[string]string
 	tmux         tmuxRunner
+	tmuxOut      tmuxOutRunner
 	mark         func(pane string)
 }
 
@@ -86,6 +98,7 @@ func newConvHub(hub *sseHub) *convHub {
 		csrf:         map[string]string{},
 		paneResolver: livePanes(hub),
 		tmux:         defaultTmux,
+		tmuxOut:      defaultTmuxOut,
 		mark:         session.MarkRead,
 	}
 }
@@ -519,6 +532,10 @@ func (s *server) serveSessionRoute(w http.ResponseWriter, r *http.Request) {
 		s.handleKey(w, r, sid)
 	case "/read":
 		s.handleRead(w, r, sid)
+	case "/terminal":
+		s.handleTerminal(w, r, sid)
+	case "/keys":
+		s.handleSendKey(w, r, sid)
 	default:
 		http.NotFound(w, r)
 	}

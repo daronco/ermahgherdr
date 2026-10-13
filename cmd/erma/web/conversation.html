@@ -18,6 +18,11 @@
     <span class="status" id="conv-conn" title="SSE connection">·</span>
   </header>
 
+  <nav class="tabs" role="tablist" aria-label="session views">
+    <button class="tab active" role="tab" data-tab="conversation" aria-selected="true">Conversation</button>
+    <button class="tab" role="tab" data-tab="terminal" aria-selected="false">Terminal</button>
+  </nav>
+
   <section id="perm-banner" class="perm-banner" hidden>
     <div class="perm-head">Permission requested</div>
     <div class="perm-body" id="perm-body"></div>
@@ -29,30 +34,57 @@
     </div>
   </section>
 
-  <main class="conv-main">
-    <button id="earlier" class="earlier" hidden>load earlier</button>
-    <ol id="turns" class="turns" aria-live="polite"></ol>
-    <p id="conv-empty" class="empty" hidden>no turns yet</p>
-  </main>
+  <div id="tab-conversation" class="tab-panel" role="tabpanel">
+    <main class="conv-main">
+      <button id="earlier" class="earlier" hidden>load earlier</button>
+      <ol id="turns" class="turns" aria-live="polite"></ol>
+      <p id="conv-empty" class="empty" hidden>no turns yet</p>
+    </main>
 
-  <footer class="composer">
-    <div class="qkbar" role="toolbar" aria-label="quick keys">
-      <button class="qk" data-key="esc" title="Escape">Esc</button>
-      <button class="qk" data-key="enter" title="Enter">↵</button>
-      <button class="qk" data-key="1" title="Choice 1">1</button>
-      <button class="qk" data-key="2" title="Choice 2">2</button>
-      <button class="qk" data-key="3" title="Choice 3">3</button>
-      <button class="qk danger" data-key="ctrl-c" title="Interrupt">^C</button>
-    </div>
-    <div class="replybox">
-      <textarea id="reply" rows="2" placeholder="type a reply, Enter to send"></textarea>
-      <div class="replybtns">
-        <button id="voice" class="voice" type="button" title="Dictate (pt-BR)" aria-label="Dictate reply (pt-BR)" aria-pressed="false" hidden>🎙</button>
-        <button id="send" class="send" title="Send">Send</button>
+    <footer class="composer">
+      <div class="qkbar" role="toolbar" aria-label="quick keys">
+        <button class="qk" data-key="esc" title="Escape">Esc</button>
+        <button class="qk" data-key="enter" title="Enter">↵</button>
+        <button class="qk" data-key="1" title="Choice 1">1</button>
+        <button class="qk" data-key="2" title="Choice 2">2</button>
+        <button class="qk" data-key="3" title="Choice 3">3</button>
+        <button class="qk danger" data-key="ctrl-c" title="Interrupt">^C</button>
       </div>
-    </div>
-  </footer>
+      <div class="replybox">
+        <textarea id="reply" rows="2" placeholder="type a reply, Enter to send"></textarea>
+        <div class="replybtns">
+          <button id="voice" class="voice" type="button" title="Dictate (pt-BR)" aria-label="Dictate reply (pt-BR)" aria-pressed="false" hidden>🎙</button>
+          <button id="send" class="send" title="Send">Send</button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <div id="tab-terminal" class="tab-panel" role="tabpanel" hidden>
+    <main class="term-main">
+      <pre id="term-screen" class="term-screen" aria-label="terminal snapshot"></pre>
+      <p id="term-empty" class="empty">loading…</p>
+    </main>
+    <footer class="term-keybar" role="toolbar" aria-label="terminal keys">
+      <button class="tk" data-tkey="Escape">Esc</button>
+      <button class="tk" data-tkey="Tab">Tab</button>
+      <button class="tk" data-tkey="Up">↑</button>
+      <button class="tk" data-tkey="Down">↓</button>
+      <button class="tk" data-tkey="Left">←</button>
+      <button class="tk" data-tkey="Right">→</button>
+      <button class="tk" data-tkey="Enter">↵</button>
+      <button class="tk" data-tkey="BSpace">⌫</button>
+      <button class="tk" data-tkey="C-a">^A</button>
+      <button class="tk" data-tkey="C-e">^E</button>
+      <button class="tk" data-tkey="C-u">^U</button>
+      <button class="tk" data-tkey="C-w">^W</button>
+      <button class="tk" data-tkey="C-l">^L</button>
+      <button class="tk" data-tkey="C-r">^R</button>
+      <button class="tk tk-danger" data-tkey="C-c">^C</button>
+    </footer>
+  </div>
 
   <script src="/conversation.js"></script>
+  <script src="/terminal.js"></script>
 </body>
 </html>
