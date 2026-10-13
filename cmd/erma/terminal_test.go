@@ -334,4 +334,3 @@ func TestAllowlistMatchesSpec(t *testing.T) {
 		}
 	}
 }
-
