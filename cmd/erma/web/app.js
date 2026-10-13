@@ -346,9 +346,10 @@
         const li = document.createElement('li');
         li.className = 'recent-row';
         li.textContent = d.path;
+        // A tap on a list row is easy to land by accident: ask before launching.
         li.addEventListener('click', () => {
           newDirInput.value = d.path;
-          submitNewSession();
+          if (window.confirm('Start a new Claude session in ' + d.path + '?')) submitNewSession();
         });
         frag.appendChild(li);
       }
