@@ -12,6 +12,20 @@
   const countsEl = document.getElementById('counts');
   const connEl = document.getElementById('conn');
 
+  const otherGroupEl = document.getElementById('other-group');
+  const otherToggleEl = document.getElementById('other-toggle');
+  const otherListEl = document.getElementById('other-list');
+  const otherHintEl = document.getElementById('other-hint');
+  const otherCountEl = document.getElementById('other-count');
+  const newBtn = document.getElementById('new-session');
+  const sheetEl = document.getElementById('new-sheet');
+  const recentListEl = document.getElementById('recent-list');
+  const recentEmptyEl = document.getElementById('recent-empty');
+  const newForm = document.getElementById('new-form');
+  const newDirInput = document.getElementById('new-dir');
+  const newErrorEl = document.getElementById('new-error');
+  const newSubmitBtn = document.getElementById('new-submit');
+
   // State → glyph, kept in lockstep with the bar.
   const GLYPH = { urgent: '●', done: '✓', proc: '…', idle: '○' };
 
@@ -194,4 +208,216 @@
   }
 
   connect();
+
+  // ---------- Other panes group ----------
+  //
+  // The group is collapsed by default and populated from /api/panes/other. We
+  // refresh it on open and every 5s while expanded — the main SSE stream only
+  // carries Claude rows. The rows are read-only: there is no pane view yet, and
+  // nothing here writes to a non-Claude pane.
+  let otherTimer = null;
+  let otherExpanded = false;
+
+  function renderOtherPanes(panes) {
+    otherListEl.innerHTML = '';
+    const list = Array.isArray(panes) ? panes : [];
+    otherCountEl.textContent = String(list.length);
+    if (list.length === 0) {
+      // If the group is currently expanded (user clicked it, then every
+      // non-Claude pane went away), collapse it and stop the poll before
+      // hiding — otherwise aria-expanded stays "true" on a hidden element
+      // and otherTimer keeps firing against an empty list.
+      if (otherExpanded) {
+        otherExpanded = false;
+        otherToggleEl.setAttribute('aria-expanded', 'false');
+        otherListEl.hidden = true;
+        otherHintEl.hidden = true;
+        otherToggleEl.classList.remove('open');
+        if (otherTimer) {
+          clearInterval(otherTimer);
+          otherTimer = null;
+        }
+      }
+      otherGroupEl.hidden = true;
+      return;
+    }
+    otherGroupEl.hidden = false;
+    const frag = document.createDocumentFragment();
+    for (const p of list) {
+      const li = document.createElement('li');
+      li.className = 'other-row';
+      const name = document.createElement('span');
+      name.className = 'other-name';
+      name.textContent = p.title || p.command || p.paneId;
+      const meta = document.createElement('span');
+      meta.className = 'other-meta';
+      meta.textContent = `${p.command || ''} · ${p.location || ''}`;
+      const path = document.createElement('span');
+      path.className = 'other-path';
+      path.textContent = p.path || '';
+      li.appendChild(name);
+      li.appendChild(meta);
+      li.appendChild(path);
+      frag.appendChild(li);
+    }
+    otherListEl.appendChild(frag);
+  }
+
+  async function fetchOtherPanes() {
+    try {
+      const res = await fetch('/api/panes/other', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const body = await res.json();
+      renderOtherPanes(body.panes || []);
+    } catch (e) {
+      console.warn('other panes', e);
+    }
+  }
+
+  otherToggleEl.addEventListener('click', () => {
+    otherExpanded = !otherExpanded;
+    otherToggleEl.setAttribute('aria-expanded', String(otherExpanded));
+    otherListEl.hidden = !otherExpanded;
+    otherHintEl.hidden = !otherExpanded;
+    otherToggleEl.classList.toggle('open', otherExpanded);
+    if (otherExpanded) {
+      fetchOtherPanes();
+      otherTimer = setInterval(fetchOtherPanes, 5000);
+    } else if (otherTimer) {
+      clearInterval(otherTimer);
+      otherTimer = null;
+    }
+  });
+
+  // Always keep the count fresh so the group reveals itself when something
+  // non-Claude shows up, even while collapsed.
+  fetchOtherPanes();
+  setInterval(() => { if (!otherExpanded) fetchOtherPanes(); }, 15000);
+
+  // ---------- New session sheet ----------
+
+  let lastFocusBeforeSheet = null;
+
+  function openSheet() {
+    lastFocusBeforeSheet = document.activeElement;
+    sheetEl.hidden = false;
+    sheetEl.setAttribute('aria-hidden', 'false');
+    newErrorEl.hidden = true;
+    newDirInput.value = '';
+    loadRecentDirs();
+    // hidden=false applies synchronously; focus on the next frame once layout
+    // has settled, rather than an arbitrary setTimeout delay.
+    requestAnimationFrame(() => newDirInput.focus());
+  }
+
+  function closeSheet() {
+    sheetEl.hidden = true;
+    sheetEl.setAttribute('aria-hidden', 'true');
+    if (lastFocusBeforeSheet && typeof lastFocusBeforeSheet.focus === 'function') {
+      lastFocusBeforeSheet.focus();
+    }
+    lastFocusBeforeSheet = null;
+  }
+
+  // Focus trap: keep Tab/Shift-Tab inside the sheet while it's open.
+  function sheetFocusables() {
+    const sel = 'a[href], button:not([disabled]), input:not([disabled]), ' +
+      'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const body = sheetEl.querySelector('.sheet-body');
+    if (!body) return [];
+    return Array.from(body.querySelectorAll(sel)).filter((el) => !el.hidden);
+  }
+
+  // The CSRF token POST /api/sessions requires; GET /api/dirs/recent hands it
+  // out with the list.
+  let newSessionCsrf = '';
+
+  async function loadRecentDirs() {
+    recentListEl.innerHTML = '';
+    try {
+      const res = await fetch('/api/dirs/recent', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const body = await res.json();
+      newSessionCsrf = res.headers.get('X-Erma-CSRF') || body.csrf || newSessionCsrf;
+      // Start from the server's default directory; the user can still edit it.
+      if (!newDirInput.value && body.default) newDirInput.value = body.default;
+      const dirs = Array.isArray(body.dirs) ? body.dirs : [];
+      recentEmptyEl.hidden = dirs.length > 0;
+      const frag = document.createDocumentFragment();
+      for (const d of dirs) {
+        const li = document.createElement('li');
+        li.className = 'recent-row';
+        li.textContent = d.path;
+        // A tap on a list row is easy to land by accident: ask before launching.
+        li.addEventListener('click', () => {
+          newDirInput.value = d.path;
+          if (window.confirm('Start a new Claude session in ' + d.path + '?')) submitNewSession();
+        });
+        frag.appendChild(li);
+      }
+      recentListEl.appendChild(frag);
+    } catch (e) {
+      console.warn('recent dirs', e);
+    }
+  }
+
+  async function submitNewSession() {
+    const dir = (newDirInput.value || '').trim();
+    if (!dir) return;
+    newSubmitBtn.disabled = true;
+    newErrorEl.hidden = true;
+    try {
+      if (!newSessionCsrf) await loadRecentDirs();
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-Erma-CSRF': newSessionCsrf },
+        body: JSON.stringify({ dir }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        newErrorEl.hidden = false;
+        newErrorEl.textContent = text || ('error ' + res.status);
+        return;
+      }
+      closeSheet();
+    } catch (e) {
+      newErrorEl.hidden = false;
+      newErrorEl.textContent = String(e && e.message || e);
+    } finally {
+      newSubmitBtn.disabled = false;
+    }
+  }
+
+  if (newBtn) newBtn.addEventListener('click', openSheet);
+  if (newForm) newForm.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    submitNewSession();
+  });
+  if (sheetEl) {
+    sheetEl.addEventListener('click', (ev) => {
+      const t = ev.target;
+      if (t && t.getAttribute && t.getAttribute('data-close') === '1') closeSheet();
+    });
+  }
+  document.addEventListener('keydown', (ev) => {
+    if (sheetEl.hidden) return;
+    if (ev.key === 'Escape') {
+      closeSheet();
+      return;
+    }
+    if (ev.key !== 'Tab') return;
+    const nodes = sheetFocusables();
+    if (nodes.length === 0) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    const active = document.activeElement;
+    if (ev.shiftKey && (active === first || !sheetEl.contains(active))) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && active === last) {
+      ev.preventDefault();
+      first.focus();
+    }
+  });
 })();

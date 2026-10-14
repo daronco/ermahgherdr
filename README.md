@@ -204,6 +204,7 @@ Flags:
 - `--tailscale-login` (or `$ERMA_TAILSCALE_LOGIN`) — the tailnet login this server trusts. Required unless `--dev-skip-auth` is set.
 - `--dev-skip-auth` — the ONLY way to bypass identity checks. Logs a loud warning on start. Do not use with a public listener.
 - `--insecure-non-loopback` — allow binding to a non-loopback address. Dangerous: the port is then open to anyone who can reach it on the LAN.
+- `--new-session-dir` (or `$ERMA_NEW_SESSION_DIR`) — where the PWA's "New session" opens `claude` when you do not pick a directory. Defaults to `~/dev/workbench`, falls back to your home directory when it does not exist, and is validated like any other path (absolute, inside your home, an existing directory).
 
 Auth model, enforced on every request (static assets, API, SSE):
 

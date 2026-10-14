@@ -1,0 +1,8 @@
+# Synthetic test paths (a symlinked home resolving under a /mnt mount),
+# committed before the test switched to a /var/home one. Pinned to the exact
+# commits so the local-home-path rule still guards every other change.
+371dc2b575aa013fa4f28f4efbf6c369ac48e0f4:cmd/erma/serve_paths_test.go:local-home-path:120
+371dc2b575aa013fa4f28f4efbf6c369ac48e0f4:cmd/erma/serve_paths_test.go:local-home-path:122
+371dc2b575aa013fa4f28f4efbf6c369ac48e0f4:cmd/erma/serve_paths_test.go:local-home-path:128
+371dc2b575aa013fa4f28f4efbf6c369ac48e0f4:cmd/erma/serve_paths_test.go:local-home-path:132
+89ba8a3dce1de0d6e99c5c5029ce5388a67233b9:cmd/erma/serve_paths_test.go:local-home-path:122
