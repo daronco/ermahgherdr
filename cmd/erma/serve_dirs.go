@@ -39,10 +39,11 @@ func defaultRecentDirsConfig() recentDirsConfig {
 // is dropped silently — this list is only ever shown as a suggestion. Entries
 // with no cwd field are skipped rather than guessed at.
 //
-// Only directories of *currently running* claude sessions appear here:
-// session.Registry drops rows whose pid is gone, so a directory the user
-// visited yesterday and closed is not resurfaced. The registry file is the
-// liveness signal; we deliberately do not keep a separate history on disk.
+// Ended sessions still contribute: session.Registry returns every session
+// file it finds, Alive:false included, and we re-validate each path on the
+// way out — a directory the user visited yesterday and closed is a fine
+// place to start the next session. The registry file is the only history
+// we keep; we deliberately do not persist a separate recents list on disk.
 func recentDirs(cfg recentDirsConfig) []recentDir {
 	rows := cfg.registry()
 	sort.SliceStable(rows, func(i, j int) bool {
