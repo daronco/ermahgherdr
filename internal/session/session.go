@@ -423,7 +423,9 @@ func SetPaneFlag(pane, fl string) {
 
 // PaneSessions maps tmux pane -> Claude session id, from the registry Claude
 // Code keeps as one file per running process. A claude that crashed leaves its
-// file behind, so a file whose process is gone does not count.
+// file behind, so a file whose process is gone does not count. A headless
+// claude (-p, the SDK) started from inside a pane inherits its TMUX_PANE and
+// registers under that pane too; only the interactive one there owns it.
 func PaneSessions() map[string]string {
 	dir := os.Getenv("CLAUDE_CONFIG_DIR")
 	if dir == "" {
@@ -437,11 +439,12 @@ func PaneSessions() map[string]string {
 			continue
 		}
 		var r struct {
-			Pid       int    `json:"pid"`
-			SessionID string `json:"sessionId"`
-			Tmux      string `json:"tmux"` // "0:@8.%16" — session:window.pane
+			Pid        int    `json:"pid"`
+			SessionID  string `json:"sessionId"`
+			Entrypoint string `json:"entrypoint"` // "cli" interactive · "sdk-cli" headless
+			Tmux       string `json:"tmux"`       // "0:@8.%16" — session:window.pane
 		}
-		if json.Unmarshal(b, &r) != nil || r.SessionID == "" {
+		if json.Unmarshal(b, &r) != nil || r.SessionID == "" || strings.HasPrefix(r.Entrypoint, "sdk") {
 			continue
 		}
 		i := strings.LastIndexByte(r.Tmux, '.')
