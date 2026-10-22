@@ -1,6 +1,9 @@
 package session
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -71,5 +74,30 @@ func TestBandOf(t *testing.T) {
 		if got := BandOf(c.fl); got != c.want {
 			t.Errorf("BandOf(%q) = %d, want %d", c.fl, got, c.want)
 		}
+	}
+}
+
+// A `claude -p` started from inside a pane (a server the session runs, a
+// script) registers under that pane too, and its file can sort after the
+// interactive one's: the pane must still map to the interactive session.
+func TestPaneSessionsSkipsHeadless(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	reg := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(reg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pid := os.Getpid() // alive, so no file is dropped as a crashed claude
+	for name, rec := range map[string][2]string{
+		"100.json": {"main", "cli"},
+		"200.json": {"child", "sdk-cli"},
+	} {
+		body := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"entrypoint":%q,"tmux":"1:@3.%%7"}`, pid, rec[0], rec[1])
+		if err := os.WriteFile(filepath.Join(reg, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := PaneSessions()["%7"]; got != "main" {
+		t.Errorf("pane %%7 maps to %q, want the interactive session %q", got, "main")
 	}
 }
