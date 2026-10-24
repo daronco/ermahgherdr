@@ -25,6 +25,82 @@ import (
 	"time"
 )
 
+// TranscriptCwd: one project's recorded working directory, carried by the
+// Claude Code JSONL transcript. MTime is the file's modification time — the
+// moment Claude last appended a turn — and is what the recent-dirs list sorts
+// by. Transcripts outlive the session itself: the pid-keyed file at
+// ~/.claude/sessions/<pid>.json is deleted on /exit and when the tmux pane
+// closes, but the transcript stays under ~/.claude/projects/.
+type TranscriptCwd struct {
+	Cwd   string
+	MTime time.Time
+}
+
+// cwdFieldRE picks up a top-level cwd:"..." pair from a JSONL row. Avoiding a
+// full JSON decode keeps the read to one small buffer per transcript — the
+// recent-dirs page can touch hundreds of files, and parsing the whole first
+// line each time was measurable at that fan-out.
+var cwdFieldRE = regexp.MustCompile(`"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// transcriptCwdScanBytes bounds the read per transcript. The cwd shows up on
+// every attachment / user / assistant row Claude Code writes, so a few KB is
+// plenty — the only rows without it are a handful of header entries
+// (queue-operation, mode, atis-latch, last-prompt).
+const transcriptCwdScanBytes = 16 << 10
+
+// TranscriptCwds walks every Claude Code transcript under the projects root
+// and returns the cwd each one records, newest first by file mtime. A
+// transcript that carries no cwd (killed before the first attachment or turn
+// landed) is skipped.
+func TranscriptCwds() []TranscriptCwd {
+	root := claudeProjectsRoot()
+	files, _ := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
+	out := make([]TranscriptCwd, 0, len(files))
+	for _, f := range files {
+		cwd, ok := firstTranscriptCwd(f)
+		if !ok {
+			continue
+		}
+		var mt time.Time
+		if fi, err := os.Stat(f); err == nil {
+			mt = fi.ModTime()
+		}
+		out = append(out, TranscriptCwd{Cwd: cwd, MTime: mt})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].MTime.After(out[j].MTime)
+	})
+	return out
+}
+
+// firstTranscriptCwd reads the leading chunk of a transcript file and returns
+// the first cwd value found. ok=false when none appears within the budget.
+func firstTranscriptCwd(path string) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	buf := make([]byte, transcriptCwdScanBytes)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return "", false
+	}
+	m := cwdFieldRE.FindSubmatch(buf[:n])
+	if m == nil {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal([]byte(`"`+string(m[1])+`"`), &s); err != nil {
+		return "", false
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", false
+	}
+	return s, true
+}
+
 // Turn: one row the PWA renders. Tool calls fold into a single Tool entry so
 // the UI collapses a message that is "assistant thinking + N tool_use blocks"
 // to one row by default.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -292,14 +293,14 @@ func TestRecentDirs(t *testing.T) {
 	t.Setenv("HOME", home)
 	now := time.Now()
 	cfg := recentDirsConfig{
-		registry: func() []session.RegistryEntry {
-			return []session.RegistryEntry{
+		cwds: func() []session.TranscriptCwd {
+			return []session.TranscriptCwd{
 				{Cwd: a, MTime: now.Add(-2 * time.Hour)},
 				{Cwd: b, MTime: now},
-				{Cwd: c, MTime: now.Add(-3 * time.Hour), Alive: false}, // ended session still counts
-				{Cwd: a, MTime: now.Add(-time.Hour)},                   // dupe, keep newest
-				{Cwd: "", MTime: now},                                  // skip empty cwd
-				{Cwd: "/does/not/exist", MTime: now},                   // skip missing
+				{Cwd: c, MTime: now.Add(-3 * time.Hour)},
+				{Cwd: a, MTime: now.Add(-time.Hour)}, // dupe, keep newest
+				{Cwd: "", MTime: now},                // skip empty cwd
+				{Cwd: "/does/not/exist", MTime: now}, // skip missing
 			}
 		},
 		validate: validateHomePath,
@@ -311,6 +312,47 @@ func TestRecentDirs(t *testing.T) {
 	}
 	if dirs[0].Path != b || dirs[1].Path != a || dirs[2].Path != c {
 		t.Errorf("order wrong: %+v", dirs)
+	}
+}
+
+// A session that ended — its ~/.claude/sessions/<pid>.json is gone, as
+// Claude Code deletes that file on /exit and on tmux pane close — must still
+// show up in recents, because the transcript under ~/.claude/projects/
+// outlives it. This models the real lifecycle, not the one the registry-
+// backed source used to see.
+func TestRecentDirsEndedSessionStillAppears(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	cwd := filepath.Join(home, "work")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Transcript file exists.
+	proj := filepath.Join(home, ".claude", "projects", "-work")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"user","timestamp":"2026-10-12T20:00:00.000Z","cwd":` +
+		strconv.Quote(cwd) +
+		`,"message":{"role":"user","content":"hi"}}` + "\n"
+	tx := filepath.Join(proj, "aaaa1111-2222-3333-4444-555566667777.jsonl")
+	if err := os.WriteFile(tx, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Registry file does NOT exist — mirrors a session that ran, ended, and
+	// had its pid file deleted. The sessions/ directory stays empty.
+	if err := os.MkdirAll(filepath.Join(home, ".claude", "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := recentDirs(recentDirsConfig{
+		cwds:     session.TranscriptCwds,
+		validate: validateHomePath,
+		limit:    10,
+	})
+	if len(dirs) != 1 || dirs[0].Path != cwd {
+		t.Fatalf("want cwd of ended session, got %+v", dirs)
 	}
 }
 
