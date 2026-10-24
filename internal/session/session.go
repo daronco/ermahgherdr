@@ -427,12 +427,57 @@ func SetPaneFlag(pane, fl string) {
 // claude (-p, the SDK) started from inside a pane inherits its TMUX_PANE and
 // registers under that pane too; only the interactive one there owns it.
 func PaneSessions() map[string]string {
+	out := map[string]string{}
+	for _, r := range readSessionRegistry() {
+		if r.alive && r.pane != "" {
+			out[r.pane] = r.sid
+		}
+	}
+	return out
+}
+
+// RegistryEntry is one row of the Claude Code session registry, as the server
+// consumes it. mtime is the file's modification time (same source the recent
+// directory list sorts by). Cwd is "" when Claude Code did not record one.
+type RegistryEntry struct {
+	Pane  string    // tmux pane id ("%16"), "" when the file has no tmux field
+	Sid   string    // Claude session id
+	Cwd   string    // the directory Claude Code was launched in, "" if absent
+	MTime time.Time // registry file mtime, for recency ordering
+	Alive bool      // its process still runs; an ended session's file stays behind
+}
+
+// Registry returns one entry per Claude Code session file, ended sessions
+// included: where a session ran is still a good place to start the next one.
+// Anything that targets a pane must use PaneSessions, which keeps only the live.
+func Registry() []RegistryEntry {
+	raw := readSessionRegistry()
+	out := make([]RegistryEntry, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, RegistryEntry{
+			Pane:  r.pane,
+			Sid:   r.sid,
+			Cwd:   r.cwd,
+			MTime: r.mtime,
+			Alive: r.alive,
+		})
+	}
+	return out
+}
+
+type regRow struct {
+	pane, sid, cwd string
+	mtime          time.Time
+	alive          bool
+}
+
+func readSessionRegistry() []regRow {
 	dir := os.Getenv("CLAUDE_CONFIG_DIR")
 	if dir == "" {
 		dir = filepath.Join(os.Getenv("HOME"), ".claude")
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "sessions", "*.json"))
-	out := map[string]string{}
+	rows := make([]regRow, 0, len(files))
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -443,17 +488,22 @@ func PaneSessions() map[string]string {
 			SessionID  string `json:"sessionId"`
 			Entrypoint string `json:"entrypoint"` // "cli" interactive · "sdk-cli" headless
 			Tmux       string `json:"tmux"`       // "0:@8.%16" — session:window.pane
+			Cwd        string `json:"cwd"`
 		}
 		if json.Unmarshal(b, &r) != nil || r.SessionID == "" || strings.HasPrefix(r.Entrypoint, "sdk") {
 			continue
 		}
-		i := strings.LastIndexByte(r.Tmux, '.')
-		if i < 0 || syscall.Kill(r.Pid, 0) == syscall.ESRCH {
-			continue
+		row := regRow{sid: r.SessionID, cwd: strings.TrimSpace(r.Cwd)}
+		if i := strings.LastIndexByte(r.Tmux, '.'); i >= 0 {
+			row.pane = r.Tmux[i+1:]
 		}
-		out[r.Tmux[i+1:]] = r.SessionID
+		if fi, err := os.Stat(f); err == nil {
+			row.mtime = fi.ModTime()
+		}
+		row.alive = r.Pid > 0 && syscall.Kill(r.Pid, 0) != syscall.ESRCH
+		rows = append(rows, row)
 	}
-	return out
+	return rows
 }
 
 // BandOf: which stretch of the list a mark puts a row in, counted from the far

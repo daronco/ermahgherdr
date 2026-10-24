@@ -89,6 +89,7 @@ type serveFlags struct {
 	tailscaleLogin     string
 	insecureNonLoopbck bool
 	devSkipAuth        bool
+	newSessionDir      string // where POST /api/sessions opens when no dir is given
 }
 
 // defaultServeFlags: a stable base other callers (tests included) can tweak.
@@ -114,6 +115,12 @@ func parseServeFlags(args []string, w *os.File) (serveFlags, error) {
 		"allow binding to a non-loopback address (DANGEROUS: the port is open to anyone who can reach it).")
 	fs.BoolVar(&sf.devSkipAuth, "dev-skip-auth", false,
 		"bypass Tailscale identity auth. Only for local development.")
+	newDir := os.Getenv("ERMA_NEW_SESSION_DIR")
+	if newDir == "" {
+		newDir = defaultNewSessionDir
+	}
+	fs.StringVar(&sf.newSessionDir, "new-session-dir", newDir,
+		"directory a new session opens in when none is picked (also from $ERMA_NEW_SESSION_DIR); a leading ~ is the home directory, and the home directory itself is used when it does not exist.")
 	if err := fs.Parse(args); err != nil {
 		return sf, err
 	}
@@ -247,9 +254,14 @@ func (s *server) mux() http.Handler {
 		panic(err) // the embed directive guarantees web/ exists at compile time
 	}
 	m := http.NewServeMux()
-	m.HandleFunc("/api/sessions", s.handleSessions)
+	// POST /api/sessions opens a new claude window; GET falls through to the
+	// list handler. Both share the "/api/sessions" exact-match path so the
+	// mux doesn't rewrite one into the other.
+	m.HandleFunc("/api/sessions", s.handleSessionsRoot)
 	m.HandleFunc("/api/sessions/", s.serveSessionRoute)
 	m.HandleFunc("/api/stream", s.handleStream)
+	m.HandleFunc("/api/dirs/recent", s.handleRecentDirs)
+	m.HandleFunc("/api/panes/other", s.handleOtherPanes)
 	m.Handle("/", http.FileServer(http.FS(root)))
 	// Go's built-in table has no .webmanifest entry and would sniff it as text/plain.
 	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
@@ -298,11 +310,22 @@ func (s *server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+// handleSessionsRoot routes exact /api/sessions by method: POST opens a new
+// claude window (the launcher owns input validation), GET returns the current
+// list snapshot. Everything else lands as 405.
+func (s *server) handleSessionsRoot(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleSessions(w, r)
+	case http.MethodPost:
+		s.handleNewSession(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
+
+func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	// Method is already gated by handleSessionsRoot.
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	// Always read from the hub snapshot: the hub owns permMiss and the only
