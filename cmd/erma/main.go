@@ -180,13 +180,13 @@ var invaderUp = []string{
 	"..X.....X..",
 }
 
-// The assistants' badges beside the mascot: the same Font Awesome icons as their
-// waybar modules (satellite-dish, briefcase), tinted by the same states.
+// The assistants' badges beside the mascot: the same icons as their waybar
+// modules (Dai's space invader, a briefcase), tinted by the same states.
 // dai-live listening sits by the antennae, workwatch by the feet. The terminal needs
 // Font Awesome 7 among its fonts (foot: a fallback in its font list), or it
 // draws a box.
 const (
-	badgeLive  = ""
+	badgeLive  = "\U000f0bc9" // Dai's space invader, from Symbols Nerd Font
 	badgeWatch = ""
 	// A button: a space, the icon, two spaces. The icon is ~1.7 cells wide and
 	// overflows into the cell after it, so the second space is what centres it.
@@ -208,7 +208,7 @@ type model struct {
 	top      bool           // lay out top-down (the --top flag) instead of bottom-up
 	comp     bool           // compact (geometry-based, with 1-item hysteresis)
 	sound    bool           // audible alerts on (mirrors tmux global @erma_sound)
-	live     string         // dai-live's state (off, armed, capturing, nosignal, error, stopped)
+	live     string         // dai-live's state (off, armed, capturing, dictating, nosignal, error, stopped)
 	watch    string         // workwatch: "recording", "paused", or "" when it is not installed
 	sway     *swayWatch     // the compositor feed: who has focus, are we on screen
 	hidden   bool           // the bar's window is on a workspace nobody is showing
@@ -2235,10 +2235,12 @@ func pixels(bmp []string, pw int) []string {
 // badgeColor: the same colours as the waybar modules of dai-live and workwatch.
 func badgeColor(state string) lipgloss.Color {
 	switch state {
-	case "capturing", "recording":
+	case "capturing":
+		return lipgloss.Color("#ab7bf2")
+	case "recording", "armed":
 		return lipgloss.Color("#4fd08a")
-	case "armed":
-		return lipgloss.Color("#e8a33d")
+	case "dictating":
+		return lipgloss.Color("#a6a6a6")
 	case "nosignal", "error", "stopped":
 		return lipgloss.Color("#e05b57")
 	}
