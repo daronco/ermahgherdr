@@ -436,3 +436,13 @@ func TestWatchTranscriptResumesFromCursor(t *testing.T) {
 		t.Fatal("no delta within 2s")
 	}
 }
+
+// A header row longer than the fast-path budget must not hide the cwd behind it.
+func TestTranscriptCwdsPastLongHeader(t *testing.T) {
+	header := `{"type":"last-prompt","lastPrompt":"` + strings.Repeat("x", transcriptCwdScanBytes) + `"}`
+	writeTranscript(t, []string{header, `{"type":"user","cwd":"/work/repo"}`})
+	got := TranscriptCwds()
+	if len(got) != 1 || got[0].Cwd != "/work/repo" {
+		t.Errorf("TranscriptCwds = %+v, want the cwd after the long header", got)
+	}
+}

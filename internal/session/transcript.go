@@ -11,6 +11,7 @@
 package session
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -42,10 +43,10 @@ type TranscriptCwd struct {
 // line each time was measurable at that fan-out.
 var cwdFieldRE = regexp.MustCompile(`"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"`)
 
-// transcriptCwdScanBytes bounds the read per transcript. The cwd shows up on
-// every attachment / user / assistant row Claude Code writes, so a few KB is
-// plenty — the only rows without it are a handful of header entries
-// (queue-operation, mode, atis-latch, last-prompt).
+// transcriptCwdScanBytes is the fast-path read per transcript. The cwd shows
+// up on every attachment / user / assistant row, so a few KB usually covers
+// it; header rows without it (queue-operation, last-prompt, …) can still run
+// past the budget, and then the rest of the file is scanned line by line.
 const transcriptCwdScanBytes = 16 << 10
 
 // TranscriptCwds walks every Claude Code transcript under the projects root
@@ -73,8 +74,8 @@ func TranscriptCwds() []TranscriptCwd {
 	return out
 }
 
-// firstTranscriptCwd reads the leading chunk of a transcript file and returns
-// the first cwd value found. ok=false when none appears within the budget.
+// firstTranscriptCwd returns the first cwd value in a transcript file.
+// ok=false when the file records none.
 func firstTranscriptCwd(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -87,6 +88,9 @@ func firstTranscriptCwd(path string) (string, bool) {
 		return "", false
 	}
 	m := cwdFieldRE.FindSubmatch(buf[:n])
+	if m == nil && n == len(buf) {
+		m = scanCwdByLine(io.MultiReader(bytes.NewReader(buf), f))
+	}
 	if m == nil {
 		return "", false
 	}
@@ -99,6 +103,21 @@ func firstTranscriptCwd(path string) (string, bool) {
 		return "", false
 	}
 	return s, true
+}
+
+// scanCwdByLine matches cwdFieldRE one JSONL row at a time, so a match never
+// straddles a read boundary and memory stays bounded by the longest row.
+func scanCwdByLine(r io.Reader) [][]byte {
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadBytes('\n')
+		if m := cwdFieldRE.FindSubmatch(line); m != nil {
+			return m
+		}
+		if err != nil {
+			return nil
+		}
+	}
 }
 
 // Turn: one row the PWA renders. Tool calls fold into a single Tool entry so

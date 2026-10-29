@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,5 +100,31 @@ func TestPaneSessionsSkipsHeadless(t *testing.T) {
 	}
 	if got := PaneSessions()["%7"]; got != "main" {
 		t.Errorf("pane %%7 maps to %q, want the interactive session %q", got, "main")
+	}
+}
+
+// A crashed claude leaves its registry file behind; PaneSessions keeps only the live.
+func TestPaneSessionsSkipsEndedSessions(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	ended := exec.Command("true")
+	if err := ended.Run(); err != nil {
+		t.Skip("cannot run true")
+	}
+	write := func(name string, pid int, sid, pane string) {
+		p := filepath.Join(cfg, "sessions", name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"tmux":"0:@0.%s"}`, pid, sid, pane)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("live.json", os.Getpid(), "live", "%1")
+	write("ended.json", ended.Process.Pid, "ended", "%2")
+
+	if ps := PaneSessions(); len(ps) != 1 || ps["%1"] != "live" {
+		t.Errorf("PaneSessions = %v, want only the live session", ps)
 	}
 }
