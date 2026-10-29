@@ -12,7 +12,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/daronco/ermahgherdr/internal/testclaude"
 )
+
+func TestMain(m *testing.M) {
+	testclaude.Main()
+	os.Exit(m.Run())
+}
 
 // A private tmux server (-L, never the user's) with one pane running "claude"
 // and one plain shell. The Claude registry knows a live session for the first
@@ -27,17 +34,13 @@ type tmuxRig struct {
 
 func newTmuxRig(t *testing.T) *tmuxRig {
 	t.Helper()
-	for _, bin := range []string{"tmux", "cat", "bash"} {
+	for _, bin := range []string{"tmux", "bash"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skip(bin + " not installed")
 		}
 	}
-	cat, _ := exec.LookPath("cat")
 	rig := &tmuxRig{dir: t.TempDir(), sock: fmt.Sprintf("erma-conv-test-%d", os.Getpid())}
-	claude := filepath.Join(rig.dir, "claude")
-	if err := os.Symlink(cat, claude); err != nil {
-		t.Fatal(err)
-	}
+	claude := testclaude.Link(t, rig.dir)
 	rig.realOut = filepath.Join(rig.dir, "real.out")
 	rig.ghostMarker = filepath.Join(rig.dir, "ghost-ran")
 

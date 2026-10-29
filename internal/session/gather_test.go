@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/daronco/ermahgherdr/internal/testclaude"
 )
 
 // tmuxFixture starts a private tmux server (-L, never the user's) with one pane
@@ -20,15 +21,8 @@ func tmuxFixture(t *testing.T) (opt func(name string) string) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("sleep not installed")
-	}
 	dir := t.TempDir()
-	claude := filepath.Join(dir, "claude")
-	if err := os.Symlink(sleep, claude); err != nil {
-		t.Fatal(err)
-	}
+	claude := testclaude.Link(t, dir)
 	sock := fmt.Sprintf("erma-test-%d", os.Getpid())
 	tm := func(a ...string) string {
 		out, err := exec.Command("tmux", append([]string{"-L", sock, "-f", "/dev/null"}, a...)...).Output()
@@ -37,7 +31,7 @@ func tmuxFixture(t *testing.T) (opt func(name string) string) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	tm("new-session", "-d", "-x", "80", "-y", "24", fmt.Sprintf("sh -c 'echo hi; exec %s 300'", claude))
+	tm("new-session", "-d", "-x", "80", "-y", "24", fmt.Sprintf("sh -c 'echo hi; exec %s'", claude))
 	path := tm("display-message", "-p", "#{socket_path}")
 	t.Cleanup(func() {
 		_ = exec.Command("tmux", "-L", sock, "kill-server").Run()
@@ -62,6 +56,11 @@ func tmuxFixture(t *testing.T) (opt func(name string) string) {
 	tm("set", "-p", "-t", pane, "@erma_flag", "prio")
 	tm("set", "-p", "-t", pane, "@erma_wait", "working")
 	return func(name string) string { return tm("show", "-p", "-q", "-v", "-t", pane, name) }
+}
+
+func TestMain(m *testing.M) {
+	testclaude.Main()
+	os.Exit(m.Run())
 }
 
 func TestGatherReadOnlyLeavesTmuxAlone(t *testing.T) {
