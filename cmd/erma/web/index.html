@@ -15,12 +15,47 @@
     <span class="mascot" aria-hidden="true">👾</span>
     <span class="title">erma</span>
     <span class="counts" id="counts" aria-live="polite"></span>
+    <button id="new-session" class="new-session" type="button" aria-label="new session">＋</button>
     <span class="status" id="conn" title="SSE connection">·</span>
   </header>
   <main>
     <ul id="list" class="sessions" aria-live="polite"></ul>
     <p id="empty" class="empty" hidden>no claude sessions</p>
+
+    <section id="other-group" class="other-group" hidden>
+      <button id="other-toggle" class="other-toggle" type="button" aria-expanded="false">
+        <span class="caret">▸</span>
+        <span class="label">Other panes</span>
+        <span class="other-count" id="other-count">0</span>
+      </button>
+      <ul id="other-list" class="other-list" hidden></ul>
+      <p id="other-hint" class="other-hint" hidden>Read-only: the terminal view opens Claude sessions only.</p>
+    </section>
   </main>
+
+  <section id="new-sheet" class="sheet" hidden aria-hidden="true">
+    <div class="sheet-backdrop" data-close="1"></div>
+    <div class="sheet-body" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <header class="sheet-head">
+        <h2 id="sheet-title">New session</h2>
+        <button class="sheet-close" data-close="1" aria-label="close">×</button>
+      </header>
+      <p class="sheet-hint">Pick a recent directory or type an absolute path inside your home.</p>
+      <ul id="recent-list" class="recent-list"></ul>
+      <p id="recent-empty" class="sheet-empty" hidden>No recent directories yet.</p>
+      <form id="new-form" class="new-form">
+        <label for="new-dir" class="new-label">Directory</label>
+        <input id="new-dir" class="new-input" type="text" inputmode="url" autocomplete="off"
+               placeholder="/home/you/code/project" required>
+        <p id="new-error" class="new-error" hidden></p>
+        <div class="new-actions">
+          <button type="button" class="btn" data-close="1">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="new-submit">Open</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
   <script src="/app.js"></script>
 </body>
 </html>
