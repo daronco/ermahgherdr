@@ -1,0 +1,10 @@
+[Unit]
+Description=erma serve — read-only HTTP view of Claude tmux sessions
+
+[Service]
+ExecStart=%h/.local/bin/erma serve --addr 127.0.0.1:8731
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

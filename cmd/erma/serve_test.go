@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -355,8 +356,17 @@ func TestToAPIFallsBackToPane(t *testing.T) {
 	}
 }
 
-// Without a configured login the server refuses to start — before it listens.
+// Without a configured login AND no tailscale-resolved one, the server refuses
+// to start — before it listens. The resolver is stubbed to a hard failure so
+// the test is deterministic regardless of whether tailscale is installed on the
+// host running the suite.
 func TestServeRequiresLogin(t *testing.T) {
+	orig := tailscaleLoginResolver
+	tailscaleLoginResolver = func(ctx context.Context) (string, error) {
+		return "", errors.New("stub: no tailscale")
+	}
+	defer func() { tailscaleLoginResolver = orig }()
+
 	// The timeout only matters if the guard regresses: the server would start
 	// and return nil when it expires, failing the test instead of hanging it.
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -364,6 +374,62 @@ func TestServeRequiresLogin(t *testing.T) {
 	err := runServeWith(ctx, serveFlags{addr: "127.0.0.1:0"})
 	if err == nil || !strings.Contains(err.Error(), "--tailscale-login") {
 		t.Fatalf("runServeWith without login: got %v, want a --tailscale-login error", err)
+	}
+}
+
+// The resolver fills in the login when none was passed explicitly, so the
+// server starts and reaches the listen+shutdown path cleanly.
+func TestServeAutoResolvesLogin(t *testing.T) {
+	orig := tailscaleLoginResolver
+	tailscaleLoginResolver = func(ctx context.Context) (string, error) {
+		return "auto@example.com", nil
+	}
+	defer func() { tailscaleLoginResolver = orig }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runServeWith(ctx, serveFlags{addr: "127.0.0.1:0"}) }()
+	// Give the listener a moment to come up, then cancel for a clean shutdown.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runServeWith with auto-resolved login: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runServeWith did not return after cancel")
+	}
+}
+
+// An explicit flag/env value wins over the resolver — the resolver is not even
+// consulted when the login is already set.
+func TestServeExplicitLoginWinsOverResolver(t *testing.T) {
+	orig := tailscaleLoginResolver
+	called := false
+	tailscaleLoginResolver = func(ctx context.Context) (string, error) {
+		called = true
+		return "resolved@example.com", nil
+	}
+	defer func() { tailscaleLoginResolver = orig }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runServeWith(ctx, serveFlags{addr: "127.0.0.1:0", tailscaleLogin: "flag@example.com"})
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runServeWith with explicit login: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runServeWith did not return after cancel")
+	}
+	if called {
+		t.Errorf("resolver was called even though an explicit login was set")
 	}
 }
 

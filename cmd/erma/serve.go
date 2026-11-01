@@ -147,7 +147,11 @@ func runServeWith(ctx context.Context, sf serveFlags) error {
 		return err
 	}
 	if !sf.devSkipAuth && sf.tailscaleLogin == "" {
-		return errors.New("erma serve: --tailscale-login (or $ERMA_TAILSCALE_LOGIN) is required unless --dev-skip-auth is set")
+		login, resolveErr := tailscaleLoginResolver(ctx)
+		if resolveErr != nil {
+			return fmt.Errorf("erma serve: --tailscale-login (or $ERMA_TAILSCALE_LOGIN) is required unless --dev-skip-auth is set, and tailscale status did not provide one: %w", resolveErr)
+		}
+		sf.tailscaleLogin = login
 	}
 	if sf.devSkipAuth {
 		log.Printf("WARNING: --dev-skip-auth is ON — every request is served without identity verification. DO NOT use this flag with any public listener.")
