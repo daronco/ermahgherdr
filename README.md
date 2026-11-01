@@ -212,46 +212,27 @@ Auth model, enforced on every request (static assets, API, SSE):
 - A header that does not match the configured login gives `403`.
 - A `Tailscale-Funnel-Request` marker gives `403` even with the right login — Funnel strips identity and would otherwise impersonate the match path.
 
-### systemd `--user` unit
+### Install the service and expose it over Tailscale
 
-Install the binary with `make install` (it lands in `~/.local/bin/erma`), then drop this at `~/.config/systemd/user/erma-serve.service`, replacing the login with your own tailnet login (`tailscale status --json | jq -r '.User[(.Self.UserID|tostring)].LoginName'` prints it):
+One target does both: `make install-serve`. It depends on `make install`, drops `contrib/erma-serve.service` at `~/.config/systemd/user/erma-serve.service`, runs `systemctl --user daemon-reload`, `systemctl --user enable --now erma-serve.service`, and — if `tailscale serve` is not already proxying `https:443` → `127.0.0.1:8731` — runs `tailscale serve --bg --https=443 http://127.0.0.1:8731`. Running it twice is a no-op; a changed unit file is picked up.
 
-```ini
-[Unit]
-Description=erma serve — read-only HTTP view of Claude tmux sessions
+The service does not need `ERMA_TAILSCALE_LOGIN` baked in: when the flag/env is unset, `erma serve` resolves the login from the local Tailscale daemon (`tailscale status --json`, the node owner's `LoginName`). An explicit `--tailscale-login` or `$ERMA_TAILSCALE_LOGIN` still wins. On a tagged node, a logged-out daemon, or a host without the `tailscale` binary, the server fails closed with a clear error — `--dev-skip-auth` remains the only bypass.
 
-[Service]
-Environment=ERMA_TAILSCALE_LOGIN=you@example.com
-ExecStart=%h/.local/bin/erma serve --addr 127.0.0.1:8731
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-```
-
-Then:
-
-```sh
-systemctl --user daemon-reload
-systemctl --user enable --now erma-serve.service
-journalctl --user -u erma-serve -f
-```
-
-The service talks to the tmux server on its default socket, so it sees the sessions of a tmux started the usual way by the same user.
-
-### Exposing over Tailscale
-
-The tailnet needs MagicDNS and HTTPS certificates enabled (admin console → DNS). With the server bound to `127.0.0.1:8731`, hand that port to `tailscale serve`:
+Tailscale requires the operator capability (or `sudo`) to edit the serve config. `make install-serve` never invokes `sudo` on your behalf; if the serve call needs it, the target prints the exact remedy:
 
 ```sh
 sudo tailscale serve --bg --https=443 http://127.0.0.1:8731
-tailscale serve status
+# or, one-time:
+sudo tailscale set --operator=$USER   # then make install-serve again
 ```
 
-`--bg` keeps the config after the command exits and across reboots; without it the proxy dies with your terminal. To run it without `sudo`, make yourself the operator once: `sudo tailscale set --operator=$USER`.
+With MagicDNS and HTTPS enabled on the tailnet (admin console → DNS), that gives you `https://<host>.<tailnet>.ts.net/` from any device signed in to your tailnet, with Tailscale injecting the identity header the server checks. A `401` there means the header did not arrive; a `403` means the login differs from the one the server trusts. **Do not** use `tailscale funnel` — the server refuses Funnel-marked requests on purpose, and the loopback bind would block it anyway.
 
-That gives you `https://<hostname>.<tailnet>.ts.net/` from any device signed in to your tailnet, with Tailscale injecting the identity header the server checks. A `401` there means the header did not arrive; a `403` means the login differs from `ERMA_TAILSCALE_LOGIN`. **Do not** use `tailscale funnel` — the server refuses Funnel-marked requests on purpose, and the loopback bind would block it anyway.
+A stable machine name in the tailnet keeps the PWA URL valid across hardware swaps: rename the machine in the admin console and move the name to the next laptop.
+
+`make uninstall-serve` disables the user unit, removes the file, runs `daemon-reload`, and prints `tailscale serve --https=443 off` for you to run yourself (it never touches other serve configs on the machine).
+
+Follow the logs with `journalctl --user -u erma-serve -f`.
 
 ## Security
 
