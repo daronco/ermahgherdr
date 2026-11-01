@@ -162,8 +162,16 @@ func runServeWith(ctx context.Context, sf serveFlags) error {
 		return fmt.Errorf("listen on %s: %w", sf.addr, err)
 	}
 	log.Printf("erma serve: listening on %s", ln.Addr())
+	if serveListeningHook != nil {
+		serveListeningHook(ln.Addr())
+	}
 	return serveOn(ctx, ln, newServer(sf))
 }
+
+// serveListeningHook, when non-nil, fires once the listener is up and before
+// serveOn starts blocking. Tests set it to synchronise with the server
+// goroutine without racing a timer; production leaves it nil.
+var serveListeningHook func(net.Addr)
 
 // serveOn runs the hub and the HTTP server on ln until ctx is cancelled, then
 // shuts down gracefully. Requests inherit ctx, so an open SSE stream ends with

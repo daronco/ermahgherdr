@@ -33,10 +33,10 @@ install-serve: install
 	install -m 0644 $(UNIT_SRC) $(UNIT_DST)
 	systemctl --user daemon-reload
 	systemctl --user enable --now $(UNIT)
-	@if ! tailscale serve status 2>/dev/null | grep -q "$(SERVE_UPSTREAM)"; then \
-		if ! tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM) 2>/dev/null; then \
+	@if ! tailscale serve status --json 2>/dev/null | grep -q "$(SERVE_UPSTREAM)"; then \
+		if ! tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM); then \
 			echo; \
-			echo "tailscale serve could not be configured without sudo. Run ONE of:"; \
+			echo "If the error above says sudo is required, run ONE of:"; \
 			echo "  sudo tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM)"; \
 			echo "  sudo tailscale set --operator=\$$USER   # one-time; then make install-serve again"; \
 		fi; \

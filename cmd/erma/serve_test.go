@@ -386,11 +386,21 @@ func TestServeAutoResolvesLogin(t *testing.T) {
 	}
 	defer func() { tailscaleLoginResolver = orig }()
 
+	ready := make(chan struct{}, 1)
+	origHook := serveListeningHook
+	serveListeningHook = func(net.Addr) { ready <- struct{}{} }
+	defer func() { serveListeningHook = origHook }()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- runServeWith(ctx, serveFlags{addr: "127.0.0.1:0"}) }()
-	// Give the listener a moment to come up, then cancel for a clean shutdown.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the listener to come up before cancelling, so a loaded CI host
+	// cannot cancel us before runServeWith has set the listener up.
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runServeWith did not reach the listening state")
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -413,12 +423,21 @@ func TestServeExplicitLoginWinsOverResolver(t *testing.T) {
 	}
 	defer func() { tailscaleLoginResolver = orig }()
 
+	ready := make(chan struct{}, 1)
+	origHook := serveListeningHook
+	serveListeningHook = func(net.Addr) { ready <- struct{}{} }
+	defer func() { serveListeningHook = origHook }()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- runServeWith(ctx, serveFlags{addr: "127.0.0.1:0", tailscaleLogin: "flag@example.com"})
 	}()
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runServeWith did not reach the listening state")
+	}
 	cancel()
 	select {
 	case err := <-done:
