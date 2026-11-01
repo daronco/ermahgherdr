@@ -34,7 +34,10 @@ install-serve: install
 	systemctl --user daemon-reload
 	systemctl --user enable --now $(UNIT)
 	@if ! tailscale serve status --json 2>/dev/null | grep -q "$(SERVE_UPSTREAM)"; then \
-		if ! tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM); then \
+		out=$$(tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM) 2>&1); \
+		rc=$$?; \
+		[ -n "$$out" ] && printf '%s\n' "$$out"; \
+		if [ $$rc -ne 0 ]; then \
 			echo; \
 			echo "If the error above says sudo is required, run ONE of:"; \
 			echo "  sudo tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM)"; \
