@@ -33,6 +33,7 @@ install-serve: install
 	install -m 0644 $(UNIT_SRC) $(UNIT_DST)
 	systemctl --user daemon-reload
 	systemctl --user enable --now $(UNIT)
+	systemctl --user try-restart $(UNIT)
 	@if ! tailscale serve status --json 2>/dev/null | grep -q "$(SERVE_UPSTREAM)"; then \
 		out=$$(tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM) 2>&1); \
 		rc=$$?; \
