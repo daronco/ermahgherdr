@@ -193,6 +193,9 @@
   // Non-SGR CSI and lone ESC sequences are rare in capture-pane -e output;
   // dropping any ESC byte conservatively undercounts rather than overcounts,
   // which keeps fit-mode scaling safe against runaway lines.
+  // CSI intermediate bytes (0x20–0x2f) are not handled and would inflate the
+  // count; tmux -e doesn't emit them, worst case fit-mode scales a bit more
+  // than needed (safe direction).
   function visibleCols(raw) {
     let max = 0;
     let cur = 0;
@@ -271,7 +274,7 @@
         return;
       }
       const raw = await res.text();
-      lastMaxCols = visibleCols(raw);
+      lastMaxCols = (mode === 'fit') ? visibleCols(raw) : 0;
       screenEl.innerHTML = ansiToHtml(raw);
       applyScale(lastMaxCols);
       if (emptyEl) emptyEl.hidden = true;
@@ -352,6 +355,8 @@
     if (!modeBtn) return;
     modeBtn.textContent = mode;
     modeBtn.setAttribute('aria-pressed', mode === 'wrap' ? 'true' : 'false');
+    const next = mode === 'fit' ? 'wrap' : 'fit';
+    modeBtn.setAttribute('aria-label', 'Switch terminal to ' + next + ' mode');
   }
   applyModeClass();
   reflectMode();
@@ -364,7 +369,11 @@
       if (visible) fetchScreen();
     });
   }
-  window.addEventListener('resize', () => applyScale(lastMaxCols));
+  // Skip while hidden: clientWidth is 0 there, so applyScale would clear the
+  // font-size and flash un-scaled text on the next tab switch.
+  window.addEventListener('resize', () => {
+    if (visible) applyScale(lastMaxCols);
+  });
 
   // Only poll while the Terminal tab is the active tab AND the browser tab
   // itself is visible. Backgrounding the page stops the fetches on the phone.
