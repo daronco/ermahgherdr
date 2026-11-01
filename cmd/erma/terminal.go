@@ -55,7 +55,14 @@ func (s *server) handleTerminal(w http.ResponseWriter, r *http.Request, sid stri
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
-	out, err := s.conv.tmuxOut("capture-pane", "-e", "-p", "-t", pane)
+	// Join wrapped lines inside tmux when the client asks for wrap-mode output:
+	// ?join=1 is the only accepted query value, every other input is ignored so
+	// a request body cannot smuggle arbitrary flags into tmux.
+	argv := []string{"capture-pane", "-e", "-p", "-t", pane}
+	if r.URL.Query().Get("join") == "1" {
+		argv = []string{"capture-pane", "-e", "-J", "-p", "-t", pane}
+	}
+	out, err := s.conv.tmuxOut(argv...)
 	if err != nil {
 		http.Error(w, "tmux: "+err.Error(), http.StatusBadGateway)
 		return
