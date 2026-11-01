@@ -34,7 +34,14 @@ install-serve: install
 	systemctl --user daemon-reload
 	systemctl --user enable --now $(UNIT)
 	systemctl --user try-restart $(UNIT)
-	@if ! tailscale serve status --json 2>/dev/null | grep -q "$(SERVE_UPSTREAM)"; then \
+	@status=$$(tailscale serve status --json 2>/dev/null); \
+	if printf '%s' "$$status" | grep -q "$(SERVE_UPSTREAM)"; then \
+		true; \
+	elif printf '%s' "$$status" | grep -qE '"$(SERVE_HTTPS)"|:$(SERVE_HTTPS)"'; then \
+		echo "warning: https:$(SERVE_HTTPS) is already served by a different upstream — not overwriting."; \
+		echo "To route it to erma, run:"; \
+		echo "  tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM)"; \
+	else \
 		out=$$(tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM) 2>&1); \
 		rc=$$?; \
 		[ -n "$$out" ] && printf '%s\n' "$$out"; \
