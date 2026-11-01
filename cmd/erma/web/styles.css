@@ -28,10 +28,11 @@ body {
 }
 
 .topbar {
-  position: sticky; top: 0; z-index: 2;
+  position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; padding-top: calc(10px + env(safe-area-inset-top));
   background: #181818;
+  background-clip: padding-box;
   border-bottom: 1px solid var(--rule);
 }
 .topbar .mascot { font-size: 20px; filter: saturate(0.6); }
@@ -166,6 +167,83 @@ main { padding: 8px 10px 24px; max-width: 760px; margin: 0 auto; }
 .turn-assistant { border-left-color: var(--done); background: var(--row-done); }
 .turn-tool_result { border-left-color: var(--proc); }
 
+/* A system turn is a compact grey chip: one-line summary visible, full body
+   collapsed inside a <details> that expands on tap. No role chip or timestamp
+   — the row is harness noise the reader opens only when they want it. */
+.turn-system {
+  background: #1a1d20;
+  border-left-color: var(--meta);
+  padding: 4px 10px;
+  color: var(--calm);
+  font-size: 12px;
+}
+.turn-system .system-detail { color: var(--calm); }
+.turn-system .system-summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--calm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+.turn-system .system-summary::-webkit-details-marker { display: none; }
+.turn-system .system-summary::before {
+  content: '▸ ';
+  color: var(--meta);
+  display: inline-block;
+  width: 1em;
+}
+.turn-system details[open] > .system-summary::before { content: '▾ '; }
+.turn-system .system-body {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  background: #141414;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--calm);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+/* A folded tool-call group: compact chip summary, step list revealed on tap. */
+.turn-tools { border-left-color: var(--ctx); padding: 4px 10px; }
+.turn-tools .tools-group > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--ctx);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.turn-tools .tools-group > summary::-webkit-details-marker { display: none; }
+.turn-tools .tools-group > summary::before {
+  content: '▸ ';
+  color: var(--meta);
+  display: inline-block;
+  width: 1em;
+}
+.turn-tools details[open] > summary::before { content: '▾ '; }
+.turn-tools .tool-steps {
+  list-style: none;
+  padding: 6px 0 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.turn-tools .tool-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  min-width: 0;
+}
+
 .turn-head {
   display: flex; justify-content: space-between; align-items: baseline;
   color: var(--meta); font-size: 12px;
@@ -229,12 +307,14 @@ body.state-urgent .topbar { background: #241a2e; }
    Tab strip + Terminal tab (session view)
    ------------------------------------------------------------------ */
 .tabs {
-  position: sticky; top: 44px; z-index: 2;
+  position: sticky; top: 44px; z-index: 4;
   display: flex; gap: 0;
   background: #181818;
+  background-clip: padding-box;
   border-bottom: 1px solid var(--rule);
   padding: 0 10px;
 }
+.conv-page .tab-panel { position: relative; z-index: 0; }
 .tabs .tab {
   background: transparent; color: var(--calm);
   border: 0; border-bottom: 2px solid transparent;
