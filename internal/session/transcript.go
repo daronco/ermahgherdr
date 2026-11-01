@@ -499,6 +499,7 @@ func classifyHarnessText(s string) (role, summary string, ok bool) {
 			name := tag[1 : len(tag)-1] // strip "<" and ">"
 			body := strings.TrimPrefix(trimmed, tag)
 			line := firstNonEmptyLine(body)
+			line = strings.TrimSuffix(strings.TrimSpace(line), "</"+name+">")
 			line = strings.TrimSpace(html.UnescapeString(line))
 			if line == "" {
 				return "system", name, true

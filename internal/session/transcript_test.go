@@ -319,13 +319,13 @@ func TestClassifyHarnessText(t *testing.T) {
 			"command-name",
 			"<command-name>/base</command-name>\n<command-message>…</command-message>",
 			"system",
-			"command-name: /base</command-name>",
+			"command-name: /base",
 		},
 		{
 			"command-message",
 			"<command-message>Loading /base…</command-message>",
 			"system",
-			"command-message: Loading /base…</command-message>",
+			"command-message: Loading /base…",
 		},
 		{
 			"local-command-stdout",
@@ -384,7 +384,7 @@ func TestParseTurnReclassifiesHarnessRows(t *testing.T) {
 			"command-name",
 			"<command-name>/base</command-name>",
 			"system",
-			"command-name: /base</command-name>",
+			"command-name: /base",
 		},
 		{
 			"plain-user",

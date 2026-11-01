@@ -83,7 +83,7 @@
     details.className = 'tools-group';
     if (open) details.open = true;
     const summary = document.createElement('summary');
-    summary.textContent = '🔧 ' + steps.length + ' steps';
+    summary.textContent = '🔧 ' + steps.length + (steps.length === 1 ? ' step' : ' steps');
     details.appendChild(summary);
     const list = document.createElement('ul');
     list.className = 'tool-steps';
@@ -99,16 +99,14 @@
   function extendToolsGroup(li, newSteps) {
     const details = li.querySelector('details.tools-group');
     if (!details) return;
-    const summary = details.querySelector('summary');
     const list = details.querySelector('ul.tool-steps');
-    const existing = list ? list.children.length : 0;
-    const total = existing + newSteps.length;
-    if (summary) summary.textContent = '🔧 ' + total + ' steps';
-    if (list) {
-      const frag = document.createDocumentFragment();
-      for (const s of newSteps) frag.appendChild(renderToolStep(s));
-      list.appendChild(frag);
-    }
+    if (!list) return;
+    const summary = details.querySelector('summary');
+    const total = list.children.length + newSteps.length;
+    if (summary) summary.textContent = '🔧 ' + total + (total === 1 ? ' step' : ' steps');
+    const frag = document.createDocumentFragment();
+    for (const s of newSteps) frag.appendChild(renderToolStep(s));
+    list.appendChild(frag);
   }
 
   function renderTurn(t) {
@@ -185,59 +183,10 @@
   // "🔧 1 steps" chip would hide one line to save none.
   const FOLD_MIN = 2;
 
-  // Append a list of turns, folding runs of >=FOLD_MIN consecutive tool-only
-  // assistant turns into a single collapsed group chip. When the incoming run
-  // starts with tool turns and the DOM already ends with a tool group, extend
-  // that existing group instead of starting a new one so the user's open/closed
-  // choice is kept.
-  function appendTurns(turns) {
-    if (!turns || turns.length === 0) return;
-    const wasBottom = isAtBottom();
-    let i = 0;
-    const lastLi = turnsEl.lastElementChild;
-    if (lastLi && lastLi.classList.contains('turn-tools') && isToolTurn(turns[0])) {
-      const run = [];
-      while (i < turns.length && isToolTurn(turns[i])) {
-        run.push(turns[i]);
-        i++;
-      }
-      extendToolsGroup(lastLi, run);
-    }
-    while (i < turns.length) {
-      const t = turns[i];
-      if (isToolTurn(t)) {
-        const run = [];
-        while (i < turns.length && isToolTurn(turns[i])) {
-          run.push(turns[i]);
-          i++;
-        }
-        if (run.length >= FOLD_MIN) {
-          turnsEl.appendChild(renderToolsGroup(run, false));
-        } else {
-          for (const r of run) turnsEl.appendChild(renderTurn(r));
-        }
-      } else {
-        turnsEl.appendChild(renderTurn(t));
-        i++;
-      }
-    }
-    emptyEl.hidden = turnsEl.children.length > 0;
-    if (wasBottom) window.scrollTo({ top: document.body.scrollHeight });
-  }
-
-  function resetTurns(turns) {
-    turnsEl.replaceChildren();
-    appendTurns(turns);
-    window.scrollTo({ top: document.body.scrollHeight });
-  }
-
-  // Older turns go above without moving what the reader is looking at. Any
-  // run of tool turns inside the page becomes a folded group; a run that
-  // touches the top of the visible list is NOT merged with it, because the
-  // caller is paging back and we want each page's groups to stay distinct.
-  function prependTurns(turns) {
-    if (!turns || turns.length === 0) return;
-    const before = document.body.scrollHeight;
+  // Walk a list of turns and build a fragment that folds runs of >=FOLD_MIN
+  // consecutive tool-only assistant turns into a single collapsed group chip.
+  // The FOLD_MIN check lives here so append/prepend share the same invariant.
+  function foldTurnsIntoFragment(turns) {
     const frag = document.createDocumentFragment();
     let i = 0;
     while (i < turns.length) {
@@ -258,7 +207,43 @@
         i++;
       }
     }
-    turnsEl.insertBefore(frag, turnsEl.firstChild);
+    return frag;
+  }
+
+  // Append a list of turns. When the incoming run starts with tool turns and
+  // the DOM already ends with a tool group, extend that existing group instead
+  // of starting a new one so the user's open/closed choice is kept.
+  function appendTurns(turns) {
+    if (!turns || turns.length === 0) return;
+    const wasBottom = isAtBottom();
+    let i = 0;
+    const lastLi = turnsEl.lastElementChild;
+    if (lastLi && lastLi.classList.contains('turn-tools') && isToolTurn(turns[0])) {
+      const run = [];
+      while (i < turns.length && isToolTurn(turns[i])) {
+        run.push(turns[i]);
+        i++;
+      }
+      extendToolsGroup(lastLi, run);
+    }
+    turnsEl.appendChild(foldTurnsIntoFragment(turns.slice(i)));
+    emptyEl.hidden = turnsEl.children.length > 0;
+    if (wasBottom) window.scrollTo({ top: document.body.scrollHeight });
+  }
+
+  function resetTurns(turns) {
+    turnsEl.replaceChildren();
+    appendTurns(turns);
+    window.scrollTo({ top: document.body.scrollHeight });
+  }
+
+  // Older turns go above without moving what the reader is looking at. A run
+  // that touches the top of the visible list is NOT merged with it, because
+  // the caller is paging back and we want each page's groups to stay distinct.
+  function prependTurns(turns) {
+    if (!turns || turns.length === 0) return;
+    const before = document.body.scrollHeight;
+    turnsEl.insertBefore(foldTurnsIntoFragment(turns), turnsEl.firstChild);
     emptyEl.hidden = turnsEl.children.length > 0;
     window.scrollBy(0, document.body.scrollHeight - before);
   }
