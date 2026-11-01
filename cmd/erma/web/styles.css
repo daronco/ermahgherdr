@@ -264,6 +264,23 @@ body.state-urgent .topbar { background: #241a2e; }
   white-space: pre;
   overflow-x: auto;
 }
+.term-screen--wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
+}
+
+.term-mode-row {
+  display: flex; justify-content: flex-end;
+  margin: 0 0 6px;
+}
+.term-mode-toggle {
+  background: #2a3030; color: var(--fg); border: 1px solid var(--rule);
+  padding: 4px 10px; border-radius: 6px; font: inherit; font-weight: 600;
+  min-height: 28px; cursor: pointer;
+}
+.term-mode-toggle:active { filter: brightness(1.15); }
+.term-mode-toggle[aria-pressed="true"] { background: #3a4040; border-color: var(--focus); }
 
 .term-keybar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 3;
