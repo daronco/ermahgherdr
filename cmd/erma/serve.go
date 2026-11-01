@@ -147,7 +147,11 @@ func runServeWith(ctx context.Context, sf serveFlags) error {
 		return err
 	}
 	if !sf.devSkipAuth && sf.tailscaleLogin == "" {
-		return errors.New("erma serve: --tailscale-login (or $ERMA_TAILSCALE_LOGIN) is required unless --dev-skip-auth is set")
+		login, resolveErr := tailscaleLoginResolver(ctx)
+		if resolveErr != nil {
+			return fmt.Errorf("erma serve: --tailscale-login (or $ERMA_TAILSCALE_LOGIN) is required unless --dev-skip-auth is set, and tailscale status did not provide one: %w", resolveErr)
+		}
+		sf.tailscaleLogin = login
 	}
 	if sf.devSkipAuth {
 		log.Printf("WARNING: --dev-skip-auth is ON — every request is served without identity verification. DO NOT use this flag with any public listener.")
@@ -158,8 +162,16 @@ func runServeWith(ctx context.Context, sf serveFlags) error {
 		return fmt.Errorf("listen on %s: %w", sf.addr, err)
 	}
 	log.Printf("erma serve: listening on %s", ln.Addr())
+	if serveListeningHook != nil {
+		serveListeningHook(ln.Addr())
+	}
 	return serveOn(ctx, ln, newServer(sf))
 }
+
+// serveListeningHook, when non-nil, fires once the listener is up and before
+// serveOn starts blocking. Tests set it to synchronise with the server
+// goroutine without racing a timer; production leaves it nil.
+var serveListeningHook func(net.Addr)
 
 // serveOn runs the hub and the HTTP server on ln until ctx is cancelled, then
 // shuts down gracefully. Requests inherit ctx, so an open SSE stream ends with

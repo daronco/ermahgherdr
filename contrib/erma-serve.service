@@ -1,0 +1,13 @@
+[Unit]
+Description=erma serve — read-only HTTP view of Claude tmux sessions
+
+[Service]
+# Override: --tailscale-login or $ERMA_TAILSCALE_LOGIN
+ExecStart=%h/.local/bin/erma serve --addr 127.0.0.1:8731
+Restart=on-failure
+# Login comes from tailscaled at start; at boot it may not be up yet, and a
+# 2 s retry would hit the 5-in-10 s start limit and leave the unit dead.
+RestartSec=10
+
+[Install]
+WantedBy=default.target

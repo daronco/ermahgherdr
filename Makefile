@@ -5,7 +5,13 @@ BIN := erma
 SCRIPTS := erma-hook erma-open erma-sway-focus erma-ctx
 SETTINGS := $(HOME)/.claude/settings.json
 
-.PHONY: build install uninstall test
+UNIT := erma-serve.service
+UNIT_SRC := contrib/$(UNIT)
+UNIT_DST := $(HOME)/.config/systemd/user/$(UNIT)
+SERVE_UPSTREAM := http://127.0.0.1:8731
+SERVE_HTTPS := 443
+
+.PHONY: build install uninstall install-serve uninstall-serve test
 .DEFAULT_GOAL := build
 
 build:
@@ -21,6 +27,37 @@ install: build
 
 uninstall:
 	rm -f $(addprefix $(BINDIR)/,$(BIN) $(SCRIPTS))
+
+install-serve: install
+	install -d $(dir $(UNIT_DST))
+	install -m 0644 $(UNIT_SRC) $(UNIT_DST)
+	systemctl --user daemon-reload
+	systemctl --user enable --now $(UNIT)
+	systemctl --user try-restart $(UNIT)
+	@status=$$(tailscale serve status --json 2>/dev/null); \
+	if printf '%s' "$$status" | grep -q "$(SERVE_UPSTREAM)"; then \
+		true; \
+	elif printf '%s' "$$status" | grep -qE '"$(SERVE_HTTPS)"|:$(SERVE_HTTPS)"'; then \
+		echo "warning: https:$(SERVE_HTTPS) is already served by a different upstream — not overwriting."; \
+		echo "To route it to erma, run:"; \
+		echo "  tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM)"; \
+	else \
+		out=$$(tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM) 2>&1); \
+		rc=$$?; \
+		[ -n "$$out" ] && printf '%s\n' "$$out"; \
+		if [ $$rc -ne 0 ]; then \
+			echo; \
+			echo "If the error above says sudo is required, run ONE of:"; \
+			echo "  sudo tailscale serve --bg --https=$(SERVE_HTTPS) $(SERVE_UPSTREAM)"; \
+			echo "  sudo tailscale set --operator=\$$USER   # one-time; then make install-serve again"; \
+		fi; \
+	fi
+
+uninstall-serve:
+	-systemctl --user disable --now $(UNIT)
+	-rm -f $(UNIT_DST)
+	-systemctl --user daemon-reload
+	@echo "To stop the Tailscale proxy, run: tailscale serve --https=$(SERVE_HTTPS) off"
 
 test:
 	$(GO) vet ./...
