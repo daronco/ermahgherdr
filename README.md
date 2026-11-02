@@ -64,7 +64,7 @@ Cyan means only *you*: the selection band, the current-session arrow, and the
 focused-header underline. When the bar has keyboard focus the little 👾 at the
 bottom raises its hands.
 
-On the phone PWA (`erma serve`), the conversation view carries a thin status strip at its foot — the session state in the same colour as the bar, the tool currently in flight, and the time since your last message.
+On the phone PWA (`erma serve`), the conversation view carries a thin status strip at its foot — the session state in the same colour as the bar, the tool currently in flight, and the time since your last message. A message you send shows up in the transcript the moment you tap Send — a dimmed echo that firms up once the server echoes it back, or stays visible in red if the send didn't land.
 
 ## Requirements
 
