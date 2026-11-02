@@ -89,6 +89,59 @@ func TestTerminalReturnsCaptureBytes(t *testing.T) {
 	}
 }
 
+// With ?join=1, handleTerminal must pass -J to tmux so wrapped lines are
+// joined before the browser wraps them again in wrap-mode. Without the flag
+// (or with any other value), -J MUST NOT appear.
+func TestTerminalJoinFlagPassthrough(t *testing.T) {
+	cases := []struct {
+		name  string
+		url   string
+		wantJ bool
+	}{
+		{"no query", "/api/sessions/s1/terminal", false},
+		{"join=1", "/api/sessions/s1/terminal?join=1", true},
+		{"join=0", "/api/sessions/s1/terminal?join=0", false},
+		{"join=yes", "/api/sessions/s1/terminal?join=yes", false},
+		{"other query", "/api/sessions/s1/terminal?foo=bar", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _, outCalls := mkTerminalServer(t, map[string]string{"s1": "%42"}, []byte("x"))
+			r := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			r.Header.Set(headerLogin, "ok@example.com")
+			w := httptest.NewRecorder()
+			srv.mux().ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("got %d: %s", w.Code, w.Body.String())
+			}
+			if len(*outCalls) != 1 {
+				t.Fatalf("want 1 capture-pane call, got %d: %+v", len(*outCalls), *outCalls)
+			}
+			argv := (*outCalls)[0]
+			hasJ := false
+			for _, a := range argv {
+				if a == "-J" {
+					hasJ = true
+					break
+				}
+			}
+			if hasJ != tc.wantJ {
+				t.Errorf("argv %+v: has -J = %v, want %v", argv, hasJ, tc.wantJ)
+			}
+			// -t pane must still be present regardless of mode.
+			foundT := false
+			for i := 0; i < len(argv)-1; i++ {
+				if argv[i] == "-t" && argv[i+1] == "%42" {
+					foundT = true
+				}
+			}
+			if !foundT {
+				t.Errorf("argv %+v: missing -t %%42", argv)
+			}
+		})
+	}
+}
+
 func TestTerminalUnknownSidIs404(t *testing.T) {
 	srv, _, outCalls := mkTerminalServer(t, map[string]string{}, nil)
 	r := httptest.NewRequest(http.MethodGet, "/api/sessions/missing/terminal", nil)

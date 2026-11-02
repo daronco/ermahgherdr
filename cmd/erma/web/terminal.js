@@ -29,10 +29,30 @@
   const REFRESH_MS = 500;
   const MAX_FETCH_ERRORS = 5;
   const KEY_ERROR_FLASH_MS = 400;
+  const MODE_KEY = 'erma.terminal.mode';
+  const BASE_FONT_PX = 13;
+  const MIN_FONT_PX = 8;
+  // Conservative width-to-font ratio for the ui-monospace stack. 0.6 is a safe
+  // upper bound across SF Mono, Menlo and Consolas; a measured value would be
+  // slightly smaller, so this errs on the side of a readable fit (never
+  // overflows the viewport).
+  const CHAR_RATIO = 0.6;
   let timer = null;
   let inFlight = false;
   let visible = false;
   let fetchErrors = 0;
+  let mode = loadMode();
+  let lastMaxCols = 0;
+
+  function loadMode() {
+    try {
+      const v = localStorage.getItem(MODE_KEY);
+      return v === 'wrap' ? 'wrap' : 'fit';
+    } catch (_) { return 'fit'; }
+  }
+  function saveMode(v) {
+    try { localStorage.setItem(MODE_KEY, v); } catch (_) {}
+  }
 
   function esc(ch) {
     switch (ch) {
@@ -169,13 +189,82 @@
     }
   }
 
+  // Strip SGR CSI runs so a line's "visible" column count ignores escape bytes.
+  // Non-SGR CSI and lone ESC sequences are rare in capture-pane -e output;
+  // dropping any ESC byte conservatively undercounts rather than overcounts,
+  // which keeps fit-mode scaling safe against runaway lines.
+  // CSI intermediate bytes (0x20–0x2f) are not handled and would inflate the
+  // count; tmux -e doesn't emit them, worst case fit-mode scales a bit more
+  // than needed (safe direction).
+  function visibleCols(raw) {
+    let max = 0;
+    let cur = 0;
+    let i = 0;
+    while (i < raw.length) {
+      const c = raw.charCodeAt(i);
+      if (c === 0x1b && i + 1 < raw.length && raw.charCodeAt(i + 1) === 0x5b) {
+        let j = i + 2;
+        while (j < raw.length) {
+          const cc = raw.charCodeAt(j);
+          if (cc >= 0x30 && cc <= 0x3f) { j++; continue; }
+          break;
+        }
+        if (j < raw.length) j++;
+        i = j;
+      } else if (c === 0x1b) {
+        i += (i + 1 < raw.length) ? 2 : 1;
+      } else if (c === 0x0a) {
+        if (cur > max) max = cur;
+        cur = 0;
+        i++;
+      } else if (c === 0x0d || c === 0x08) {
+        i++;
+      } else {
+        cur++;
+        i++;
+      }
+    }
+    if (cur > max) max = cur;
+    return max;
+  }
+
+  // Fit-mode: scale font-size down so a line of `cols` characters fits the
+  // current .term-screen width. Never upscale beyond BASE_FONT_PX, never go
+  // below MIN_FONT_PX. Wrap mode clears any inline font-size so the stylesheet
+  // default wins.
+  function applyScale(cols) {
+    if (mode !== 'fit') {
+      screenEl.style.fontSize = '';
+      return;
+    }
+    const avail = screenEl.clientWidth
+      - parseFloat(getComputedStyle(screenEl).paddingLeft || '0')
+      - parseFloat(getComputedStyle(screenEl).paddingRight || '0');
+    if (!(cols > 0) || !(avail > 0)) {
+      screenEl.style.fontSize = '';
+      return;
+    }
+    const target = avail / (cols * CHAR_RATIO);
+    const px = Math.max(MIN_FONT_PX, Math.min(BASE_FONT_PX, target));
+    screenEl.style.fontSize = px.toFixed(2) + 'px';
+  }
+
+  function applyModeClass() {
+    if (mode === 'wrap') {
+      screenEl.classList.add('term-screen--wrap');
+    } else {
+      screenEl.classList.remove('term-screen--wrap');
+    }
+    applyScale(lastMaxCols);
+  }
+
   async function fetchScreen() {
     if (inFlight) return;
     inFlight = true;
     try {
-      const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/terminal', {
-        cache: 'no-store',
-      });
+      const url = '/api/sessions/' + encodeURIComponent(SID) + '/terminal'
+        + (mode === 'wrap' ? '?join=1' : '');
+      const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) {
         if (emptyEl) {
           emptyEl.hidden = false;
@@ -185,7 +274,9 @@
         return;
       }
       const raw = await res.text();
+      lastMaxCols = (mode === 'fit') ? visibleCols(raw) : 0;
       screenEl.innerHTML = ansiToHtml(raw);
+      applyScale(lastMaxCols);
       if (emptyEl) emptyEl.hidden = true;
       fetchErrors = 0;
     } catch (e) {
@@ -257,6 +348,31 @@
         btn.disabled = false;
       }
     });
+  });
+
+  const modeBtn = document.getElementById('term-mode-toggle');
+  function reflectMode() {
+    if (!modeBtn) return;
+    modeBtn.textContent = mode;
+    modeBtn.setAttribute('aria-pressed', mode === 'wrap' ? 'true' : 'false');
+    const next = mode === 'fit' ? 'wrap' : 'fit';
+    modeBtn.setAttribute('aria-label', 'Switch terminal to ' + next + ' mode');
+  }
+  applyModeClass();
+  reflectMode();
+  if (modeBtn) {
+    modeBtn.addEventListener('click', () => {
+      mode = (mode === 'fit') ? 'wrap' : 'fit';
+      saveMode(mode);
+      reflectMode();
+      applyModeClass();
+      if (visible) fetchScreen();
+    });
+  }
+  // Skip while hidden: clientWidth is 0 there, so applyScale would clear the
+  // font-size and flash un-scaled text on the next tab switch.
+  window.addEventListener('resize', () => {
+    if (visible) applyScale(lastMaxCols);
   });
 
   // Only poll while the Terminal tab is the active tab AND the browser tab
