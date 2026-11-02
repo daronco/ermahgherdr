@@ -132,15 +132,15 @@
     // -------- hostile fixtures --------
 
     run('literal <script> tag',
-      '<script>alert(1)</script>',
-      [noExecutableTags(), allLinksSafe(), expectText('<script>alert(1)</script>')]);
+      '<script>alert(1)<\/script>',
+      [noExecutableTags(), allLinksSafe(), expectText('<script>alert(1)<\/script>')]);
 
     run('javascript: link',
       '[x](javascript:alert(1))',
       [noExecutableTags(), allLinksSafe(), expectNoTag('a'), expectText('x')]);
 
     run('data: link',
-      '[y](data:text/html,<script>alert(1)</script>)',
+      '[y](data:text/html,<script>alert(1)<\/script>)',
       [noExecutableTags(), allLinksSafe(), expectNoTag('a')]);
 
     run('vbscript: link',
@@ -156,8 +156,8 @@
       [noExecutableTags(), expectText('<img src=x onerror=alert(1)>')]);
 
     run('fenced block containing </pre><script>',
-      '```\n</pre><script>alert(1)</script>\n```',
-      [noExecutableTags(), expectTag('pre code', 1), expectText('</pre><script>alert(1)</script>')]);
+      '```\n</pre><script>alert(1)<\/script>\n```',
+      [noExecutableTags(), expectTag('pre code', 1), expectText('</pre><script>alert(1)<\/script>')]);
 
     run('html entities land verbatim',
       '&lt;script&gt; and &amp;',
