@@ -22,10 +22,13 @@
   const emptyEl = document.getElementById('conv-empty');
   const permEl = document.getElementById('perm-banner');
   const permBodyEl = document.getElementById('perm-body');
+  const permChoicesEl = document.getElementById('perm-choices');
   const replyEl = document.getElementById('reply');
   const sendBtn = document.getElementById('send');
   const voiceBtn = document.getElementById('voice');
   const earlierBtn = document.getElementById('earlier');
+  const toastEl = document.getElementById('toast');
+  const sendWarnEl = document.getElementById('send-warn');
 
   // The CSRF token issued by GET /conversation. Needed on every POST. The
   // conversation GET refreshes it; if we have none yet, state-changing POSTs
@@ -33,10 +36,16 @@
   let csrf = '';
   let lastKnownState = ''; // for the permission banner
   let latestScreenPrompt = '';
+  let latestChoices = [];
+  let inputDirty = false;
+  // The send guard asks the user to confirm when the pane's input box already
+  // has text; a second Send click within this window goes through.
+  let sendConfirm = false;
   // The page holds the transcript from byte `start` to byte `cursor`: the
   // stream resumes at `cursor`, "load earlier" pages back from `start`.
   let cursor = 0;
   let start = 0;
+  let toastTimer = 0;
 
   function setConn(state) {
     connEl.className = 'status ' + state;
@@ -263,6 +272,19 @@
     } else if (row.state !== 'urgent') {
       latestScreenPrompt = '';
     }
+    if (Array.isArray(row.choices) && row.choices.length > 0) {
+      latestChoices = row.choices;
+    } else if (row.state !== 'urgent') {
+      latestChoices = [];
+    }
+    const nextDirty = !!row.input_dirty;
+    if (nextDirty !== inputDirty) {
+      // The pane cleared or filled; drop any pending confirm so the next Send
+      // either sails through (now clean) or warns fresh (now dirty).
+      sendConfirm = false;
+      clearSendWarn();
+    }
+    inputDirty = nextDirty;
     document.body.classList.remove('state-idle', 'state-done', 'state-proc', 'state-urgent');
     if (row.state) document.body.classList.add('state-' + row.state);
     titleEl.textContent = row.name || row.pane || SID;
@@ -278,14 +300,61 @@
   // The permission banner shows whenever the row is `urgent`. The server parses
   // the pane's Screen and sends the question text as `row.prompt`; if that is
   // missing (older server, or the Screen hasn't been read yet), fall back to a
-  // generic nudge so the keys are still prominent.
+  // generic nudge. Choices come alongside the prompt; a tap on a choice posts
+  // the matching digit to /key.
   function renderPermBanner() {
-    if (lastKnownState === 'urgent') {
-      permEl.hidden = false;
-      permBodyEl.textContent = latestScreenPrompt || 'Claude is waiting on an answer. Pick a choice or press Esc.';
-    } else {
+    if (lastKnownState !== 'urgent') {
       permEl.hidden = true;
+      permChoicesEl.replaceChildren();
+      return;
     }
+    permEl.hidden = false;
+    permBodyEl.textContent = latestScreenPrompt || 'Claude is waiting on an answer. Pick a choice or press Esc.';
+    permChoicesEl.replaceChildren();
+    for (const c of latestChoices) {
+      if (!c || !c.key) continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'qk perm-choice';
+      b.setAttribute('data-key', c.key);
+      b.textContent = c.key + '. ' + (c.label || '');
+      b.addEventListener('click', () => callKey(c.key));
+      permChoicesEl.appendChild(b);
+    }
+    const esc = document.createElement('button');
+    esc.type = 'button';
+    esc.className = 'qk perm-choice';
+    esc.setAttribute('data-key', 'esc');
+    esc.textContent = 'Esc';
+    esc.addEventListener('click', () => callKey('esc'));
+    permChoicesEl.appendChild(esc);
+  }
+
+  // showToast surfaces a short-lived "sent" indication on every successful
+  // /key or /text — the Claude pane's own feedback is invisible on the phone,
+  // so without this a tap looks like it did nothing.
+  function showToast(text) {
+    if (!toastEl) return;
+    toastEl.textContent = text;
+    toastEl.hidden = false;
+    toastEl.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastEl.classList.remove('show');
+      toastEl.hidden = true;
+      toastTimer = 0;
+    }, 1500);
+  }
+
+  function showSendWarn(text) {
+    if (!sendWarnEl) return;
+    sendWarnEl.textContent = text;
+    sendWarnEl.hidden = false;
+  }
+  function clearSendWarn() {
+    if (!sendWarnEl) return;
+    sendWarnEl.textContent = '';
+    sendWarnEl.hidden = true;
   }
 
   // Fetch helpers.
@@ -327,11 +396,23 @@
       headers: { 'X-Erma-CSRF': csrf, 'Content-Type': 'application/json' },
       body: JSON.stringify({ key }),
     });
-    if (!res.ok) console.warn('key', key, res.status);
+    if (!res.ok) {
+      console.warn('key', key, res.status);
+      return;
+    }
+    showToast('sent ' + key);
   }
 
   async function callText(text) {
     if (!csrf || !text) return;
+    // Guard against appending to a pane that already has unsent text.
+    // The server exposes input_dirty on every state update; a user who really
+    // means to append confirms with a second Send inside the same dirty window.
+    if (inputDirty && !sendConfirm) {
+      sendConfirm = true;
+      showSendWarn('The Claude input box already has text. Tap Send again to append, or press ^C / Esc to clear it first.');
+      return;
+    }
     sendBtn.disabled = true;
     try {
       const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/text', {
@@ -343,6 +424,9 @@
         console.warn('text', res.status);
       } else {
         replyEl.value = '';
+        sendConfirm = false;
+        clearSendWarn();
+        showToast('sent');
       }
     } finally {
       sendBtn.disabled = false;

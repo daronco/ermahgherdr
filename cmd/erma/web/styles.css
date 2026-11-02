@@ -147,7 +147,31 @@ main { padding: 8px 10px 24px; max-width: 760px; margin: 0 auto; }
 }
 .perm-head { font-weight: 700; color: var(--urgent); letter-spacing: 0.3px; font-size: 12px; text-transform: uppercase; }
 .perm-body { margin-top: 4px; color: var(--fg); white-space: pre-wrap; }
-.perm-keys { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.perm-choices { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.perm-choice { text-align: left; max-width: 100%; white-space: normal; }
+
+/* Short-lived "sent" feedback for /key and /text — the Claude pane itself gives
+   no visible confirmation on the phone, so this is the only sign it worked. */
+.toast {
+  position: fixed; left: 50%; bottom: 160px;
+  transform: translateX(-50%);
+  background: #141414; color: var(--fg);
+  border: 1px solid var(--rule); border-radius: 999px;
+  padding: 6px 14px; font-size: 13px; font-weight: 600;
+  z-index: 20;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.toast.show { opacity: 0.95; }
+
+/* The pre-send warning sits above the composer when the pane already has
+   unsent text; a second Send tap confirms. */
+.send-warn {
+  margin: 0; padding: 8px 10px;
+  background: #2a1f1f; color: #e8c58a;
+  border: 1px solid #4a2323; border-radius: 6px;
+  font-size: 12px;
+}
 
 .turns { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .earlier {
