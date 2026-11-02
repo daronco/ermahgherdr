@@ -128,7 +128,11 @@
     if (t.text) {
       const body = document.createElement('div');
       body.className = 'turn-body';
-      body.textContent = t.text;
+      if (t.role === 'assistant' && window.ermaRenderMarkdown) {
+        window.ermaRenderMarkdown(t.text, body);
+      } else {
+        body.textContent = t.text;
+      }
       li.appendChild(body);
     }
     // An assistant turn carrying prose can still have a tool call attached;
