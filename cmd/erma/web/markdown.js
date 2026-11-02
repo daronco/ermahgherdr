@@ -22,9 +22,10 @@
   // are safe: javascript:, data:, vbscript: can execute attacker-supplied
   // code; file: can exfiltrate local files; mailto: and tel: open native
   // handlers the user did not consent to; relative/path-only hrefs like
-  // /api/... are navigations inside this origin that an attacker-controlled
-  // transcript must not be able to trigger. Anything outside http(s) returns
-  // null and the caller falls back to rendering the label as plain text.
+  // /api/... and fragment anchors like #section are navigations inside this
+  // origin that an attacker-controlled transcript must not be able to trigger.
+  // Anything outside http(s) returns null and the caller falls back to
+  // rendering the label as plain text.
   function safeHref(url) {
     const u = String(url == null ? '' : url).trim();
     if (/^https?:\/\//i.test(u)) return u;
