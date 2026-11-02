@@ -64,6 +64,8 @@ Cyan means only *you*: the selection band, the current-session arrow, and the
 focused-header underline. When the bar has keyboard focus the little 👾 at the
 bottom raises its hands.
 
+On the phone PWA (`erma serve`), the conversation view carries a thin status strip at its foot — the session state in the same colour as the bar, the tool currently in flight, and the time since your last message.
+
 ## Requirements
 
 - **tmux** — sessions are discovered as panes whose foreground command is `claude`.
