@@ -382,7 +382,7 @@ func inputBoxDirty(body string) bool {
 		if s == "" {
 			continue
 		}
-		s = strings.TrimLeft(s, "❯ ")
+		s = strings.TrimPrefix(s, "❯")
 		if strings.TrimSpace(s) != "" {
 			return true
 		}
