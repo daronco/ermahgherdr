@@ -54,7 +54,9 @@
   // entry is {_localId, text}; the DOM node carries data-local-id to match.
   const pendingEchoes = [];
   // Parallel store of rendered turns, oldest-first, used by latestPendingTool
-  // to find the tool call that is still in flight.
+  // to find the tool call that is still in flight. Grows for the lifetime of
+  // the page — fine for a session, trim if long-running conversations become
+  // common.
   const allTurns = [];
   // Timestamp of the newest user message — either sent locally or arrived on
   // the stream. The elapsed counter in the status strip reads from here.
@@ -279,7 +281,12 @@
     if (!turns || turns.length === 0) return;
     for (const t of turns) {
       if (!t._pending) reconcilePendingEcho(t);
-      if (t.role === 'user' && !t._pending) noteUserTurn(Date.now());
+      if (t.role === 'user' && !t._pending) {
+        // Prefer the turn's own timestamp — a batch of historical turns on
+        // reconnect or boot would otherwise reset the counter to now.
+        const ts = t.ts ? new Date(t.ts).getTime() : Date.now();
+        noteUserTurn(ts);
+      }
     }
     const wasBottom = isAtBottom();
     let i = 0;
@@ -326,6 +333,8 @@
   // latestPendingTool: walk the turn store from the tail for the newest
   // assistant turn carrying a tool block that has no later tool_result turn.
   // That's the tool currently running — the CLI spinner shows the same thing.
+  // Assumes sequential tool execution: any later tool_result is treated as the
+  // match. Parallel tool calls would need result-id correlation.
   function latestPendingTool() {
     for (let i = allTurns.length - 1; i >= 0; i--) {
       const t = allTurns[i];
@@ -615,7 +624,6 @@
         const payload = JSON.parse(ev.data);
         appendTurns(payload.turns);
         cursor = payload.cursor;
-        updateStrip();
       } catch (e) {
         console.error('delta', e);
       }
