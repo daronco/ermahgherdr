@@ -465,6 +465,89 @@ func TestNewSessionDefaultDir(t *testing.T) {
 	}
 }
 
+// GET /api/sessions must carry per-session choices and the input-dirty flag.
+// The hub snapshot is seeded directly: toAPI's projection is what the client
+// reads, so this pins both fields on the wire in one shot.
+func TestSessionsCarryChoicesAndInputDirty(t *testing.T) {
+	srv := newServer(serveFlags{tailscaleLogin: "ok@example.com"})
+	srv.hub.gather = func() []apiSession {
+		return []apiSession{{
+			ID: "s1", Pane: "%1", Name: "demo", State: "urgent",
+			Prompt: "Do you want to create permprobe-xyz.txt?",
+			Choices: []apiChoice{
+				{Key: "1", Label: "Yes"},
+				{Key: "2", Label: "Yes, and switch to accept edits for this session (shift+tab)"},
+				{Key: "3", Label: "No"},
+			},
+			InputDirty: true,
+		}}
+	}
+	srv.hub.tick()
+	r := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	r.Header.Set(headerLogin, "ok@example.com")
+	w := httptest.NewRecorder()
+	srv.mux().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	// Decode into a loose shape to assert the JSON keys the client reads
+	// (choices, input_dirty) rather than the Go field names.
+	var rows []struct {
+		ID         string      `json:"id"`
+		Prompt     string      `json:"prompt"`
+		Choices    []apiChoice `json:"choices"`
+		InputDirty bool        `json:"input_dirty"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v, body=%s", err, w.Body.String())
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows: %+v", rows)
+	}
+	got := rows[0]
+	if got.Prompt == "" {
+		t.Errorf("prompt dropped: %+v", got)
+	}
+	if !got.InputDirty {
+		t.Errorf("input_dirty = false, want true")
+	}
+	want := []apiChoice{
+		{Key: "1", Label: "Yes"},
+		{Key: "2", Label: "Yes, and switch to accept edits for this session (shift+tab)"},
+		{Key: "3", Label: "No"},
+	}
+	if len(got.Choices) != len(want) {
+		t.Fatalf("choices: got %+v, want %+v", got.Choices, want)
+	}
+	for i := range want {
+		if got.Choices[i] != want[i] {
+			t.Errorf("choice %d = %+v, want %+v", i, got.Choices[i], want[i])
+		}
+	}
+}
+
+// A pane with no dialog up carries no choices and no input_dirty on the wire:
+// the client treats their absence as "no buttons, no warning". Verifies the
+// omitempty tags on apiSession so an idle session stays minimal.
+func TestSessionsOmitEmptyChoicesAndInputDirty(t *testing.T) {
+	srv := newServer(serveFlags{tailscaleLogin: "ok@example.com"})
+	srv.hub.gather = func() []apiSession {
+		return []apiSession{{ID: "s1", Pane: "%1", Name: "idle", State: "idle"}}
+	}
+	srv.hub.tick()
+	r := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	r.Header.Set(headerLogin, "ok@example.com")
+	w := httptest.NewRecorder()
+	srv.mux().ServeHTTP(w, r)
+	body := w.Body.String()
+	if strings.Contains(body, `"choices"`) {
+		t.Errorf("idle row leaked a choices key: %s", body)
+	}
+	if strings.Contains(body, `"input_dirty"`) {
+		t.Errorf("idle row leaked an input_dirty key: %s", body)
+	}
+}
+
 func TestParseServeFlagsNewSessionDir(t *testing.T) {
 	t.Setenv("ERMA_NEW_SESSION_DIR", "")
 	if sf, _ := parseServeFlags(nil, nil); sf.newSessionDir != "~/dev/workbench" {

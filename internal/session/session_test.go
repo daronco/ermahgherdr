@@ -78,6 +78,86 @@ func TestBandOf(t *testing.T) {
 	}
 }
 
+// extractPromptChoices feeds the per-session Choices on the apiSession wire;
+// the two canonical captures pin that the parse strips the "N. " prefix and
+// any cursor marker, and keeps multi-line option descriptions off the label.
+func TestExtractPromptChoices(t *testing.T) {
+	for _, c := range []struct {
+		file string
+		want []Choice
+	}{
+		{"../../cmd/erma/testdata/screen-permission.txt", []Choice{
+			{Key: "1", Label: "Yes"},
+			{Key: "2", Label: "Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)"},
+			{Key: "3", Label: "No"},
+		}},
+		{"../../cmd/erma/testdata/screen-question.txt", []Choice{
+			{Key: "1", Label: "Tea"},
+			{Key: "2", Label: "Coffee"},
+			{Key: "3", Label: "Type something."},
+			{Key: "4", Label: "Chat about this"},
+		}},
+	} {
+		b, err := os.ReadFile(c.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := extractPromptChoices(string(b))
+		if len(got) != len(c.want) {
+			t.Errorf("%s: got %d choices, want %d: %+v", c.file, len(got), len(c.want), got)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: choice %d = %+v, want %+v", c.file, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+// inputBoxDirty is the pre-send guard the client uses to warn when the user
+// is about to append onto Claude's input box without seeing what's already in
+// it. Only non-whitespace content between the last two dividers counts.
+func TestInputBoxDirty(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"empty input box", "─────\n❯ \n─────\n", false},
+		{"typed in input box", "─────\n❯ cat the file\n─────\n", true},
+		{"no dividers", "no box at all here", false},
+		{"single divider", "────\n❯ foo", false},
+		{"only whitespace between dividers", "────\n   \n────\n", false},
+		{"content without cursor marker", "────\n hello\n────\n", true},
+	} {
+		if got := inputBoxDirty(c.body); got != c.want {
+			t.Errorf("%s: inputBoxDirty = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Canonical captures: the live-tail capture has text in the input box; the
+// permission dialog screen covers the box so there is no dirt to warn about.
+func TestInputBoxDirtyCaptures(t *testing.T) {
+	for _, c := range []struct {
+		file string
+		want bool
+	}{
+		{"../../cmd/erma/testdata/screen-answered.txt", true},
+		{"../../cmd/erma/testdata/screen-background-done.txt", false},
+		{"../../cmd/erma/testdata/screen-permission.txt", false},
+	} {
+		b, err := os.ReadFile(c.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := inputBoxDirty(string(b)); got != c.want {
+			t.Errorf("%s: inputBoxDirty = %v, want %v", c.file, got, c.want)
+		}
+	}
+}
+
 // A `claude -p` started from inside a pane (a server the session runs, a
 // script) registers under that pane too, and its file can sort after the
 // interactive one's: the pane must still map to the interactive session.
