@@ -50,8 +50,15 @@
       const row = document.createElement('div');
       row.className = 'case ' + (ok ? 'pass' : 'fail');
       const head = document.createElement('div');
-      head.innerHTML = '<span class="verdict">' + (ok ? 'PASS' : 'FAIL') + '</span> · <span class="label"></span>';
-      head.querySelector('.label').textContent = label;
+      const verdict = document.createElement('span');
+      verdict.className = 'verdict';
+      verdict.textContent = ok ? 'PASS' : 'FAIL';
+      head.appendChild(verdict);
+      head.appendChild(document.createTextNode(' · '));
+      const labelEl = document.createElement('span');
+      labelEl.className = 'label';
+      labelEl.textContent = label;
+      head.appendChild(labelEl);
       row.appendChild(head);
       const inp = document.createElement('pre');
       inp.textContent = 'input: ' + JSON.stringify(input);

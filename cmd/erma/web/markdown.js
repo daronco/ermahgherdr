@@ -18,6 +18,13 @@
 (function () {
   'use strict';
 
+  // Allow-list of URL schemes for rendered links. Only http:// and https://
+  // are safe: javascript:, data:, vbscript: can execute attacker-supplied
+  // code; file: can exfiltrate local files; mailto: and tel: open native
+  // handlers the user did not consent to; relative/path-only hrefs like
+  // /api/... are navigations inside this origin that an attacker-controlled
+  // transcript must not be able to trigger. Anything outside http(s) returns
+  // null and the caller falls back to rendering the label as plain text.
   function safeHref(url) {
     const u = String(url == null ? '' : url).trim();
     if (/^https?:\/\//i.test(u)) return u;
@@ -84,16 +91,21 @@
       }
 
       // bold ** or __
+      // Left-flanking guard: the char right after the opening delimiter must
+      // not be a space, so `** word**` falls through as literal characters.
       if ((c === '*' || c === '_') && text.charAt(i + 1) === c) {
-        const delim = c + c;
-        const end = findDelimClose(text, i + 2, delim);
-        if (end > i + 2) {
-          flush();
-          const strong = document.createElement('strong');
-          renderInline(text.slice(i + 2, end), strong);
-          parent.appendChild(strong);
-          i = end + 2;
-          continue;
+        const after = text.charAt(i + 2);
+        if (after && after !== ' ') {
+          const delim = c + c;
+          const end = findDelimClose(text, i + 2, delim);
+          if (end > i + 2) {
+            flush();
+            const strong = document.createElement('strong');
+            renderInline(text.slice(i + 2, end), strong);
+            parent.appendChild(strong);
+            i = end + 2;
+            continue;
+          }
         }
       }
 
@@ -148,7 +160,7 @@
 
   function findDelimClose(text, start, delim) {
     for (let j = start; j <= text.length - delim.length; j++) {
-      if (text.substr(j, delim.length) === delim && text.charAt(j - 1) !== ' ') {
+      if (text.slice(j, j + delim.length) === delim && text.charAt(j - 1) !== ' ') {
         return j;
       }
     }
@@ -158,8 +170,10 @@
   function findSingleDelimClose(text, start, delim) {
     for (let j = start; j < text.length; j++) {
       if (text.charAt(j) === delim && text.charAt(j - 1) !== ' ') {
-        // Reject a delimiter adjacent to another same-delim character on
-        // either side — that pair belongs to a bold open/close, not italic.
+        // Both sides are checked: `j+1 === delim` rejects an italic close that
+        // is really the first half of a `**` bold open (`*foo **b** bar*`),
+        // and `j-1 === delim` rejects the second half of a `**` bold close
+        // (`**foo** bar`) from being swallowed as an italic terminator.
         if (text.charAt(j + 1) === delim) continue;
         if (text.charAt(j - 1) === delim) continue;
         return j;
@@ -260,8 +274,10 @@
   function isTableSeparator(line) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.indexOf('|') < 0 && trimmed.indexOf('-') < 0) return false;
-    // Cells of only -, :, spaces, pipes.
-    return /^[\s|:-]+$/.test(trimmed) && trimmed.indexOf('-') >= 0;
+    // Cells of only -, :, spaces, pipes. The `\-` is escaped so the class is
+    // read as four discrete characters (whitespace / `|` / `:` / `-`), not as
+    // a `:` to `-` range.
+    return /^[\s|:\-]+$/.test(trimmed) && trimmed.indexOf('-') >= 0;
   }
 
   function parseTableRow(line) {
@@ -277,6 +293,7 @@
     const firstMatch = lines[start].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
     const baseIndent = firstMatch[1].length;
     const ordered = /\d+\./.test(firstMatch[2]);
+    const startNum = ordered ? parseInt(firstMatch[2], 10) : null;
     const items = [];
     let i = start;
     while (i < lines.length) {
@@ -321,7 +338,7 @@
       if (contLines.length) item.text += '\n' + contLines.join('\n');
       items.push(item);
     }
-    return { block: { type: 'list', ordered: ordered, items: items }, next: i };
+    return { block: { type: 'list', ordered: ordered, start: startNum, items: items }, next: i };
   }
 
   function renderBlock(block, parent) {
@@ -353,6 +370,9 @@
       }
       case 'list': {
         const el = document.createElement(block.ordered ? 'ol' : 'ul');
+        if (block.ordered && Number.isFinite(block.start) && block.start !== 1) {
+          el.setAttribute('start', String(block.start));
+        }
         for (const it of block.items) {
           const li = document.createElement('li');
           renderInline(it.text, li);
