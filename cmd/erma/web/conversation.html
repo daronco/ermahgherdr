@@ -26,13 +26,10 @@
   <section id="perm-banner" class="perm-banner" hidden>
     <div class="perm-head">Permission requested</div>
     <div class="perm-body" id="perm-body"></div>
-    <div class="perm-keys">
-      <button class="qk" data-key="1">1</button>
-      <button class="qk" data-key="2">2</button>
-      <button class="qk" data-key="3">3</button>
-      <button class="qk" data-key="esc">Esc</button>
-    </div>
+    <div class="perm-choices" id="perm-choices"></div>
   </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <div id="tab-conversation" class="tab-panel" role="tabpanel">
     <main class="conv-main">
@@ -44,12 +41,9 @@
     <footer class="composer">
       <div class="qkbar" role="toolbar" aria-label="quick keys">
         <button class="qk" data-key="esc" title="Escape">Esc</button>
-        <button class="qk" data-key="enter" title="Enter">↵</button>
-        <button class="qk" data-key="1" title="Choice 1">1</button>
-        <button class="qk" data-key="2" title="Choice 2">2</button>
-        <button class="qk" data-key="3" title="Choice 3">3</button>
         <button class="qk danger" data-key="ctrl-c" title="Interrupt">^C</button>
       </div>
+      <p id="send-warn" class="send-warn" hidden></p>
       <div class="replybox">
         <textarea id="reply" rows="2" placeholder="type a reply, Enter to send"></textarea>
         <div class="replybtns">

@@ -55,6 +55,15 @@ type Screen struct {
 	Viewer bool // the transcript viewer covers the session: the screen says nothing
 }
 
+// Choice: one entry in a Claude Code numbered-option dialog, as parsed off the
+// pane screen. Key is the leading digit the user would press to select it;
+// Label is the option's visible text, with the leading "N. " and any cursor
+// marker stripped.
+type Choice struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
 // Session: one pane running Claude Code, as the bar wants to render it.
 type Session struct {
 	Pane, SessWin, Name string
@@ -67,19 +76,23 @@ type Session struct {
 	Sub                 int    // subagents running under it (@erma_sub)
 	Dai                 bool   // the Dai session dai-live keeps (pane option @dai_live)
 	Prompt              string // the question text parsed off the pane's screen, when a dialog is up
+	Choices             []Choice
+	InputDirty          bool // the pane's input box has non-whitespace content
 	S, W, P             int
 }
 
 // Poll: one tmux round-trip's result — what every pane is showing, which
 // clients are attached, and the shared sound flag.
 type Poll struct {
-	Screens map[string]Screen
-	Prompts map[string]string // pane → the on-screen question text, when a dialog is up
-	Clients []int             // client pids, for the focus rule
-	Current string            // the pane the first attached client is showing
-	Win     string            // and its window, as session:index
-	Sound   bool
-	Live    string // @dai_live_state, set by dai-live; "" without it
+	Screens    map[string]Screen
+	Prompts    map[string]string // pane → the on-screen question text, when a dialog is up
+	Choices    map[string][]Choice
+	InputDirty map[string]bool
+	Clients    []int  // client pids, for the focus rule
+	Current    string // the pane the first attached client is showing
+	Win        string // and its window, as session:index
+	Sound      bool
+	Live       string // @dai_live_state, set by dai-live; "" without it
 }
 
 // FlagRec: one row of flags.json.
@@ -207,6 +220,8 @@ func PollPanes(panes []string) Poll {
 	}
 	poll.Screens = map[string]Screen{}
 	poll.Prompts = map[string]string{}
+	poll.Choices = map[string][]Choice{}
+	poll.InputDirty = map[string]bool{}
 	for i, blk := range blocks[4:] {
 		if i < len(panes) && strings.TrimSpace(blk) != "" {
 			if sc := ReadScreen(blk); !sc.Viewer {
@@ -215,6 +230,12 @@ func PollPanes(panes []string) Poll {
 					if q := extractPromptText(blk); q != "" {
 						poll.Prompts[panes[i]] = q
 					}
+					if cs := extractPromptChoices(blk); len(cs) > 0 {
+						poll.Choices[panes[i]] = cs
+					}
+				}
+				if inputBoxDirty(blk) {
+					poll.InputDirty[panes[i]] = true
 				}
 			}
 		}
@@ -300,6 +321,73 @@ func extractPromptText(body string) string {
 		return s
 	}
 	return ""
+}
+
+// extractPromptChoices pulls the pane's numbered options off the screen so the
+// PWA can render a labelled button per choice instead of three unlabelled
+// digits. The caller is expected to have already decided a dialog is up
+// (sc.Prompt || sc.Form).
+//
+// A choice is any line matching optLine ("N. ...", with or without the "❯ "
+// cursor marker). The scan covers the whole pane, not just the foot: Claude
+// Code's AskUserQuestion sometimes draws options above the final divider
+// (with trailing options past it), and the first instance of each key wins
+// so a numbered list quoted elsewhere does not duplicate a real choice.
+func extractPromptChoices(body string) []Choice {
+	seen := map[string]bool{}
+	var choices []Choice
+	for _, ln := range strings.Split(body, "\n") {
+		trimmed := strings.TrimLeft(ln, " │")
+		m := optLine.FindStringSubmatch(trimmed)
+		if m == nil {
+			continue
+		}
+		rest := strings.TrimPrefix(trimmed, m[0])
+		// Pick the leading digit out of the matched prefix. optLine guarantees
+		// one is there; this just reads it without re-parsing the regex.
+		var key string
+		for _, c := range m[0] {
+			if c >= '1' && c <= '9' {
+				key = string(c)
+				break
+			}
+		}
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		choices = append(choices, Choice{Key: key, Label: strings.TrimSpace(rest)})
+	}
+	return choices
+}
+
+// inputBoxDirty reports whether the pane's Claude input box is holding
+// non-whitespace content. The box sits between the last two solid dividers;
+// panes without that frame (a transcript viewer, a dialog that fills the
+// screen) report false — there is no visible input box to warn about.
+func inputBoxDirty(body string) bool {
+	lines := strings.Split(body, "\n")
+	var rules []int
+	for i, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), "──") {
+			rules = append(rules, i)
+		}
+	}
+	if len(rules) < 2 {
+		return false
+	}
+	top, bot := rules[len(rules)-2], rules[len(rules)-1]
+	for i := top + 1; i < bot; i++ {
+		s := strings.TrimSpace(lines[i])
+		if s == "" {
+			continue
+		}
+		s = strings.TrimPrefix(s, "❯")
+		if strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // trimPromptLine strips the box-drawing characters and leading whitespace
@@ -575,9 +663,11 @@ func gather(permMiss map[string]int, write bool) ([]Session, Poll) {
 		rows = append(rows, Session{
 			Pane: c[0], SessWin: c[1] + ":" + c[2], Name: name, Sid: sid, Flag: fl,
 			Mark: wait, St: st, Since: since, Ctx: strings.TrimSpace(c[9]), Sub: len(strings.Fields(c[10])),
-			Dai:    c[12] != "", // dai-live marks it with its data directory
-			Prompt: poll.Prompts[c[0]],
-			S:      atoi(c[1]), W: atoi(c[2]), P: atoi(c[3]),
+			Dai:        c[12] != "", // dai-live marks it with its data directory
+			Prompt:     poll.Prompts[c[0]],
+			Choices:    poll.Choices[c[0]],
+			InputDirty: poll.InputDirty[c[0]],
+			S:          atoi(c[1]), W: atoi(c[2]), P: atoi(c[3]),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool { // stable by loc — never reorders under the cursor

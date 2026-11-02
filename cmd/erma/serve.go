@@ -36,20 +36,30 @@ var webFS embed.FS
 // rows for seconds at a time, a faster one would waste forks.
 const servePollInterval = 600 * time.Millisecond
 
+// apiChoice: one labelled option a Claude Code numbered dialog is offering,
+// as parsed off the pane screen. The key is what we send on /key; the label
+// is the option's visible text (without the leading "N. " or cursor marker).
+type apiChoice struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
 // apiSession is the on-the-wire shape of GET /api/sessions. It only exports
 // what the PWA actually needs today — enough to render the list the bar paints.
 // Keep the field names in lockstep with the client (cmd/erma/web/app.js).
 type apiSession struct {
-	ID     string `json:"id"`               // sessionId, or the pane id when no registry file exists yet
-	Pane   string `json:"pane"`             // tmux pane id (%42)
-	Name   string `json:"name"`             // human-readable label
-	State  string `json:"state"`            // idle | done | proc | urgent
-	Since  int64  `json:"since"`            // unix seconds the state has held
-	Marks  string `json:"marks"`            // "" | paused | prio
-	Sub    int    `json:"sub"`              // subagents under this session
-	Ctx    string `json:"ctx"`              // @erma_ctx_used (percent as string), may be empty
-	Dai    bool   `json:"dai"`              // the dai-live pinned session
-	Prompt string `json:"prompt,omitempty"` // the pending permission question, parsed off the pane's screen
+	ID         string      `json:"id"`                    // sessionId, or the pane id when no registry file exists yet
+	Pane       string      `json:"pane"`                  // tmux pane id (%42)
+	Name       string      `json:"name"`                  // human-readable label
+	State      string      `json:"state"`                 // idle | done | proc | urgent
+	Since      int64       `json:"since"`                 // unix seconds the state has held
+	Marks      string      `json:"marks"`                 // "" | paused | prio
+	Sub        int         `json:"sub"`                   // subagents under this session
+	Ctx        string      `json:"ctx"`                   // @erma_ctx_used (percent as string), may be empty
+	Dai        bool        `json:"dai"`                   // the dai-live pinned session
+	Prompt     string      `json:"prompt,omitempty"`      // the pending permission question, parsed off the pane's screen
+	Choices    []apiChoice `json:"choices,omitempty"`     // numbered options the dialog is offering
+	InputDirty bool        `json:"input_dirty,omitempty"` // the Claude input box already holds unsent text
 }
 
 // stateString: the state enum, in the exact spelling the front-end switches on.
@@ -74,11 +84,18 @@ func toAPI(s session.Session) apiSession {
 	if id == "" {
 		id = s.Pane
 	}
+	var choices []apiChoice
+	if len(s.Choices) > 0 {
+		choices = make([]apiChoice, len(s.Choices))
+		for i, c := range s.Choices {
+			choices[i] = apiChoice{Key: c.Key, Label: c.Label}
+		}
+	}
 	return apiSession{
 		ID: id, Pane: s.Pane, Name: s.Name,
 		State: stateString(s.St), Since: s.Since,
 		Marks: s.Flag, Sub: s.Sub, Ctx: s.Ctx, Dai: s.Dai,
-		Prompt: s.Prompt,
+		Prompt: s.Prompt, Choices: choices, InputDirty: s.InputDirty,
 	}
 }
 
@@ -513,7 +530,28 @@ func sameSessions(a, b []apiSession) bool {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if !sameAPISession(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameAPISession compares two apiSession values including their Choices slice.
+// Direct == does not work because apiSession carries a slice; a hand-rolled
+// equality here keeps the hub's diff gate the only thing it needs to be.
+func sameAPISession(a, b apiSession) bool {
+	if a.ID != b.ID || a.Pane != b.Pane || a.Name != b.Name ||
+		a.State != b.State || a.Since != b.Since || a.Marks != b.Marks ||
+		a.Sub != b.Sub || a.Ctx != b.Ctx || a.Dai != b.Dai ||
+		a.Prompt != b.Prompt || a.InputDirty != b.InputDirty {
+		return false
+	}
+	if len(a.Choices) != len(b.Choices) {
+		return false
+	}
+	for i := range a.Choices {
+		if a.Choices[i] != b.Choices[i] {
 			return false
 		}
 	}
