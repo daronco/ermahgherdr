@@ -27,6 +27,10 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Classes that set `display` (.sheet is flex) beat the UA's [hidden] rule, so
+   the attribute alone never hid them; the new-session sheet could not close. */
+[hidden] { display: none !important; }
+
 .topbar {
   position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 10px;
@@ -325,7 +329,7 @@ body.state-urgent .topbar { background: #241a2e; }
 .tabs .tab.active { color: var(--fg); border-bottom-color: var(--focus); }
 .tabs .tab:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 
-.tab-panel[hidden] { display: none; }
+
 
 /* Terminal tab layout. The snapshot gets the body; the key bar sticks at
    the bottom like the conversation composer. */
