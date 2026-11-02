@@ -268,11 +268,13 @@ func (s *server) handleConversation(w http.ResponseWriter, r *http.Request, sid 
 		before, _ := cursorParam(q.Get("before"))
 		turns, start, next, err = session.ReadConversationBefore(sid, before, session.TailBytes)
 	}
+	// The pane is live, so a missing transcript only means Claude has not
+	// written its first turn yet (a session just opened from the phone): serve
+	// it empty with a CSRF token, or the first message could never be sent.
+	if errors.Is(err, session.ErrUnknownSession) {
+		turns, start, next, err = nil, 0, 0, nil
+	}
 	if err != nil {
-		if errors.Is(err, session.ErrUnknownSession) {
-			http.Error(w, "unknown session", http.StatusNotFound)
-			return
-		}
 		http.Error(w, "read transcript: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

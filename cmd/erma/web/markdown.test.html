@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>markdown.js — tests</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 20px; background: #111; color: #ddd; }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    .case { border: 1px solid #333; border-radius: 4px; margin: 8px 0; padding: 8px 10px; }
+    .case.pass { border-color: #2d6; }
+    .case.fail { border-color: #e55; background: #2a1515; }
+    .label { font-weight: 600; }
+    .pass .verdict { color: #2d6; }
+    .fail .verdict { color: #f66; }
+    pre { background: #0a0a0a; padding: 6px 8px; border-radius: 3px; white-space: pre-wrap; margin: 4px 0; font-size: 12px; }
+    .sandbox { border: 1px dashed #444; padding: 6px 8px; margin-top: 4px; background: #0e0e0e; }
+    #summary { margin-bottom: 12px; padding: 8px 12px; border-radius: 4px; font-weight: 600; }
+    #summary.ok { background: #163; color: #cfc; }
+    #summary.bad { background: #611; color: #fcc; }
+  </style>
+</head>
+<body>
+  <h1>markdown.js — tests</h1>
+  <div id="summary">running…</div>
+  <div id="results"></div>
+
+  <script src="/markdown.js"></script>
+  <script>
+    'use strict';
+
+    const results = document.getElementById('results');
+    const summary = document.getElementById('summary');
+    let pass = 0, fail = 0;
+
+    function run(label, input, checks) {
+      const sandbox = document.createElement('div');
+      sandbox.className = 'sandbox';
+      window.ermaRenderMarkdown(input, sandbox);
+      const problems = [];
+      for (const check of checks) {
+        try {
+          const err = check(sandbox);
+          if (err) problems.push(err);
+        } catch (e) {
+          problems.push('threw: ' + e.message);
+        }
+      }
+      const ok = problems.length === 0;
+      ok ? pass++ : fail++;
+      const row = document.createElement('div');
+      row.className = 'case ' + (ok ? 'pass' : 'fail');
+      const head = document.createElement('div');
+      const verdict = document.createElement('span');
+      verdict.className = 'verdict';
+      verdict.textContent = ok ? 'PASS' : 'FAIL';
+      head.appendChild(verdict);
+      head.appendChild(document.createTextNode(' · '));
+      const labelEl = document.createElement('span');
+      labelEl.className = 'label';
+      labelEl.textContent = label;
+      head.appendChild(labelEl);
+      row.appendChild(head);
+      const inp = document.createElement('pre');
+      inp.textContent = 'input: ' + JSON.stringify(input);
+      row.appendChild(inp);
+      if (!ok) {
+        for (const p of problems) {
+          const perr = document.createElement('pre');
+          perr.textContent = p;
+          row.appendChild(perr);
+        }
+      }
+      row.appendChild(sandbox);
+      results.appendChild(row);
+    }
+
+    // -------- generic security checks --------
+
+    function noExecutableTags() {
+      return function (el) {
+        const n = el.querySelectorAll('script, iframe, object, embed, img').length;
+        if (n > 0) return 'found ' + n + ' executable/image tag(s)';
+        return null;
+      };
+    }
+
+    function allLinksSafe() {
+      return function (el) {
+        const links = el.querySelectorAll('a');
+        for (const a of links) {
+          const href = a.getAttribute('href') || '';
+          if (!/^https?:\/\//i.test(href)) return 'unsafe href: ' + href;
+          if (a.getAttribute('rel') !== 'noopener noreferrer') return 'bad rel on ' + href + ': ' + a.getAttribute('rel');
+          if (a.getAttribute('target') !== '_blank') return 'bad target on ' + href + ': ' + a.getAttribute('target');
+        }
+        return null;
+      };
+    }
+
+    function expectTag(sel, min) {
+      return function (el) {
+        const n = el.querySelectorAll(sel).length;
+        if (n < min) return 'expected at least ' + min + ' ' + sel + ', got ' + n;
+        return null;
+      };
+    }
+
+    function expectNoTag(sel) {
+      return function (el) {
+        const n = el.querySelectorAll(sel).length;
+        if (n !== 0) return 'expected 0 ' + sel + ', got ' + n;
+        return null;
+      };
+    }
+
+    function expectText(fragment) {
+      return function (el) {
+        if (el.textContent.indexOf(fragment) < 0) return 'missing text: ' + fragment;
+        return null;
+      };
+    }
+
+    function expectHref(url) {
+      return function (el) {
+        for (const a of el.querySelectorAll('a')) {
+          if (a.getAttribute('href') === url) return null;
+        }
+        return 'no <a href=' + url + '>';
+      };
+    }
+
+    // -------- hostile fixtures --------
+
+    run('literal <script> tag',
+      '<script>alert(1)<\/script>',
+      [noExecutableTags(), allLinksSafe(), expectText('<script>alert(1)<\/script>')]);
+
+    run('javascript: link',
+      '[x](javascript:alert(1))',
+      [noExecutableTags(), allLinksSafe(), expectNoTag('a'), expectText('x')]);
+
+    run('data: link',
+      '[y](data:text/html,<script>alert(1)<\/script>)',
+      [noExecutableTags(), allLinksSafe(), expectNoTag('a')]);
+
+    run('vbscript: link',
+      '[z](vbscript:msgbox)',
+      [noExecutableTags(), allLinksSafe(), expectNoTag('a')]);
+
+    run('file: link',
+      '[local](file:///etc/passwd)',
+      [noExecutableTags(), allLinksSafe(), expectNoTag('a')]);
+
+    run('<img onerror=…>',
+      '<img src=x onerror=alert(1)>',
+      [noExecutableTags(), expectText('<img src=x onerror=alert(1)>')]);
+
+    run('fenced block containing </pre><script>',
+      '```\n</pre><script>alert(1)<\/script>\n```',
+      [noExecutableTags(), expectTag('pre code', 1), expectText('</pre><script>alert(1)<\/script>')]);
+
+    run('html entities land verbatim',
+      '&lt;script&gt; and &amp;',
+      [noExecutableTags(), expectText('&lt;script&gt; and &amp;')]);
+
+    run('mixed case JavaScript: link',
+      '[x](JAVASCRIPT:alert(1))',
+      [noExecutableTags(), allLinksSafe(), expectNoTag('a')]);
+
+    run('whitespace-padded javascript: link',
+      '[x](  javascript:alert(1)  )',
+      [noExecutableTags(), allLinksSafe(), expectNoTag('a')]);
+
+    // -------- golden-path fixtures --------
+
+    run('bold',
+      '**hello**',
+      [noExecutableTags(), allLinksSafe(), expectTag('strong', 1), expectText('hello')]);
+
+    run('italic *',
+      '*hello*',
+      [noExecutableTags(), allLinksSafe(), expectTag('em', 1), expectText('hello')]);
+
+    run('inline code',
+      'use `foo()` here',
+      [noExecutableTags(), allLinksSafe(), expectTag('code', 1), expectText('foo()')]);
+
+    run('headings',
+      '# one\n## two\n### three',
+      [noExecutableTags(), expectTag('h1', 1), expectTag('h2', 1), expectTag('h3', 1)]);
+
+    run('unordered list',
+      '- a\n- b\n- c',
+      [noExecutableTags(), expectTag('ul', 1), expectTag('li', 3)]);
+
+    run('ordered list',
+      '1. a\n2. b\n3. c',
+      [noExecutableTags(), expectTag('ol', 1), expectTag('li', 3)]);
+
+    run('nested list one level',
+      '- parent\n  - child\n- sibling',
+      [noExecutableTags(), expectTag('ul ul', 1)]);
+
+    run('fenced code block',
+      '```\nhello\nworld\n```',
+      [noExecutableTags(), expectTag('pre code', 1), expectText('hello\nworld')]);
+
+    run('pipe table',
+      '| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |',
+      [noExecutableTags(), expectTag('table', 1), expectTag('th', 2), expectTag('td', 4)]);
+
+    run('safe https link',
+      '[claude](https://claude.ai)',
+      [noExecutableTags(), allLinksSafe(), expectTag('a', 1), expectHref('https://claude.ai')]);
+
+    run('safe http link',
+      '[ex](http://example.com)',
+      [noExecutableTags(), allLinksSafe(), expectHref('http://example.com')]);
+
+    run('snake_case not italicised',
+      'use `my_var_name`',
+      [noExecutableTags(), expectTag('code', 1), expectNoTag('em')]);
+
+    run('intra-word underscore in prose',
+      'foo_bar_baz literal',
+      [noExecutableTags(), expectNoTag('em'), expectText('foo_bar_baz literal')]);
+
+    run('unterminated bold falls through',
+      '**no close here',
+      [noExecutableTags(), expectNoTag('strong'), expectText('**no close here')]);
+
+    run('bold inside italic',
+      '*a **b** c*',
+      [noExecutableTags(), expectTag('em', 1), expectTag('em strong', 1)]);
+
+    // -------- summary --------
+
+    const total = pass + fail;
+    summary.textContent = pass + ' / ' + total + ' passing' + (fail ? ' (' + fail + ' failing)' : '');
+    summary.className = fail === 0 ? 'ok' : 'bad';
+  </script>
+</body>
+</html>

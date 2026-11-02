@@ -27,6 +27,10 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Classes that set `display` (.sheet is flex) beat the UA's [hidden] rule, so
+   the attribute alone never hid them; the new-session sheet could not close. */
+[hidden] { display: none !important; }
+
 .topbar {
   position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 10px;
@@ -278,7 +282,73 @@ main { padding: 8px 10px 24px; max-width: 760px; margin: 0 auto; }
 .turn-assistant .turn-role { color: var(--done); }
 .turn-tool_result .turn-role { color: var(--proc); }
 
-.turn-body { color: var(--fg); white-space: pre-wrap; word-wrap: break-word; }
+.turn-body { color: var(--fg); word-wrap: break-word; }
+/* Assistant turns go through the Markdown renderer and emit real block nodes,
+   so .turn-body itself no longer forces pre-wrap — paragraphs and <br> carry
+   the whitespace. User and tool_result turns use textContent and would lose
+   their newlines without an override, so they keep pre-wrap below. */
+.turn-user .turn-body,
+.turn-tool_result .turn-body { white-space: pre-wrap; }
+
+.turn-body p { margin: 0 0 8px; }
+.turn-body p:last-child { margin-bottom: 0; }
+.turn-body h1,
+.turn-body h2,
+.turn-body h3 { margin: 10px 0 6px; line-height: 1.25; }
+.turn-body h1 { font-size: 1.15em; }
+.turn-body h2 { font-size: 1.08em; }
+.turn-body h3 { font-size: 1.02em; }
+.turn-body ul,
+.turn-body ol { margin: 4px 0 8px; padding-inline-start: 1.25rem; }
+.turn-body li { margin: 2px 0; }
+.turn-body strong { font-weight: 700; }
+.turn-body em { font-style: italic; }
+.turn-body a { color: var(--focus); text-decoration: underline; word-break: break-all; }
+.turn-body code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: rgba(255,255,255,0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+/* Fenced code blocks and tables SHALL scroll inside their own box without
+   producing page-level horizontal scroll at a 390px viewport. */
+.turn-body pre {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  white-space: pre;
+}
+.turn-body pre code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.92em;
+}
+.turn-body .md-table-wrap {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 4px 0 8px;
+}
+.turn-body table {
+  border-collapse: collapse;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+.turn-body th,
+.turn-body td {
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  white-space: nowrap;
+  text-align: left;
+}
+.turn-body th { background: rgba(255,255,255,0.04); font-weight: 600; }
 
 .turn-tool { display: flex; align-items: baseline; gap: 8px; }
 .tool-name { color: var(--ctx); font-weight: 700; }
@@ -349,7 +419,7 @@ body.state-urgent .topbar { background: #241a2e; }
 .tabs .tab.active { color: var(--fg); border-bottom-color: var(--focus); }
 .tabs .tab:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 
-.tab-panel[hidden] { display: none; }
+
 
 /* Terminal tab layout. The snapshot gets the body; the key bar sticks at
    the bottom like the conversation composer. */
