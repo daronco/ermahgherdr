@@ -587,3 +587,36 @@ func TestStreamResumesFromCursor(t *testing.T) {
 		}
 	}
 }
+
+// A session opened from the phone has a live pane but no transcript until its
+// first turn; the conversation must still open and hand out a CSRF token.
+func TestConversationOfNewSessionWithoutTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	sid := "11111111-2222-3333-4444-555555555555"
+	srv, calls := mkConvServer(t, map[string]string{sid: "%9"}, nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/sessions/"+sid+"/conversation", nil)
+	r.Header.Set(headerLogin, "ok@example.com")
+	w := httptest.NewRecorder()
+	srv.mux().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /conversation: got %d: %s", w.Code, w.Body.String())
+	}
+	tok := w.Header().Get("X-Erma-CSRF")
+	if tok == "" {
+		t.Fatal("no CSRF token for a session without a transcript")
+	}
+	body, _ := json.Marshal(textBody{Text: "first message"})
+	r = httptest.NewRequest(http.MethodPost, "/api/sessions/"+sid+"/text", bytes.NewReader(body))
+	r.Header.Set(headerLogin, "ok@example.com")
+	r.Header.Set("Origin", "http://"+r.Host)
+	r.Header.Set("X-Erma-CSRF", tok)
+	w = httptest.NewRecorder()
+	srv.mux().ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("POST /text: got %d: %s", w.Code, w.Body.String())
+	}
+	if len(*calls) == 0 {
+		t.Fatal("no tmux call for the first message")
+	}
+}
