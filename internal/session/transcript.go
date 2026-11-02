@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"path/filepath"
@@ -124,10 +125,11 @@ func scanCwdByLine(r io.Reader) [][]byte {
 // the UI collapses a message that is "assistant thinking + N tool_use blocks"
 // to one row by default.
 type Turn struct {
-	Role string    `json:"role"`           // "user" | "assistant" | "tool_result"
-	Ts   time.Time `json:"ts"`             // the transcript's own timestamp
-	Text string    `json:"text"`           // user-visible text; a short summary for tool_result
-	Tool *ToolCall `json:"tool,omitempty"` // non-nil for an assistant turn whose body is a tool call
+	Role    string    `json:"role"`              // "user" | "assistant" | "tool_result" | "system"
+	Ts      time.Time `json:"ts"`                // the transcript's own timestamp
+	Text    string    `json:"text"`              // user-visible text; a short summary for tool_result; the full raw body for system
+	Summary string    `json:"summary,omitempty"` // one-line label for a collapsed system turn
+	Tool    *ToolCall `json:"tool,omitempty"`    // non-nil for an assistant turn whose body is a tool call
 }
 
 // ToolCall: the folded summary of an assistant tool_use block.
@@ -393,6 +395,11 @@ func parseTurn(line []byte) (Turn, bool) {
 		if s == "" {
 			return Turn{}, false
 		}
+		if m.Role == "user" {
+			if role, summary, ok := classifyHarnessText(s); ok {
+				return Turn{Role: role, Ts: ts, Text: s, Summary: summary}, true
+			}
+		}
 		return Turn{Role: m.Role, Ts: ts, Text: s}, true
 	}
 	var blocks []contentBlock
@@ -438,7 +445,11 @@ func parseTurn(line []byte) (Turn, bool) {
 		return Turn{Role: "assistant", Ts: ts, Text: text.String()}, true
 	case "user":
 		if text.Len() > 0 {
-			return Turn{Role: "user", Ts: ts, Text: text.String()}, true
+			s := text.String()
+			if role, summary, ok := classifyHarnessText(s); ok {
+				return Turn{Role: role, Ts: ts, Text: s, Summary: summary}, true
+			}
+			return Turn{Role: "user", Ts: ts, Text: s}, true
 		}
 		// Nothing but tool_result blocks. Render only when it errored OR carried
 		// a short result — the common success case is already implied by the
@@ -454,6 +465,60 @@ func parseTurn(line []byte) (Turn, bool) {
 		return Turn{}, false
 	}
 	return Turn{}, false
+}
+
+// harnessTags: non-task-notification harness wrappers Claude Code injects as
+// user-role rows. The PWA labels these "YOU" by default; the parser reclaims
+// them as "system" so the UI can render a compact chip instead.
+var harnessTags = []string{
+	"<system-reminder>",
+	"<command-name>",
+	"<command-message>",
+	"<local-command-stdout>",
+}
+
+// taskNotificationSummaryRE pulls the inner summary out of a <task-notification>
+// envelope. The opening tag may carry attributes (type="…"), so a prefix match
+// is enough — the summary is what we actually show.
+var taskNotificationSummaryRE = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
+
+// classifyHarnessText decides whether a user-role content string is a harness
+// injection and, if so, returns the role to reclassify it as plus a one-line
+// summary. A plain prompt returns ok=false.
+func classifyHarnessText(s string) (role, summary string, ok bool) {
+	trimmed := strings.TrimLeft(s, " \t\r\n")
+	if strings.HasPrefix(trimmed, "<task-notification") {
+		head := strings.TrimSpace(firstNonEmptyLine(trimmed))
+		if m := taskNotificationSummaryRE.FindStringSubmatch(trimmed); m != nil {
+			head = strings.TrimSpace(html.UnescapeString(m[1]))
+		}
+		return "system", oneLine(head), true
+	}
+	for _, tag := range harnessTags {
+		if strings.HasPrefix(trimmed, tag) {
+			name := tag[1 : len(tag)-1] // strip "<" and ">"
+			body := strings.TrimPrefix(trimmed, tag)
+			line := firstNonEmptyLine(body)
+			line = strings.TrimSuffix(strings.TrimSpace(line), "</"+name+">")
+			line = strings.TrimSpace(html.UnescapeString(line))
+			if line == "" {
+				return "system", name, true
+			}
+			return "system", oneLine(name + ": " + line), true
+		}
+	}
+	return "", "", false
+}
+
+// firstNonEmptyLine returns the first line of s that has any non-whitespace
+// character. An empty string comes back when every line is blank.
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 // summarizeToolInput folds a tool_use input blob into one line. The exact

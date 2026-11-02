@@ -58,7 +58,59 @@
     return window.innerHeight + window.scrollY >= document.body.scrollHeight - slop;
   }
 
+  // Build a <li> for a tool-use step inside a folded group.
+  function renderToolStep(t) {
+    const row = document.createElement('li');
+    row.className = 'tool-step';
+    const name = document.createElement('span');
+    name.className = 'tool-name';
+    name.textContent = (t.tool && t.tool.name) || 'tool';
+    row.appendChild(name);
+    const args = document.createElement('span');
+    args.className = 'tool-args';
+    args.textContent = (t.tool && t.tool.args) || '';
+    row.appendChild(args);
+    return row;
+  }
+
+  // Build the folded group chip for a run of consecutive tool-call turns.
+  // Expansion state is kept across live updates so a user who opened the chip
+  // keeps seeing the steps as new ones get appended via SSE.
+  function renderToolsGroup(steps, open) {
+    const li = document.createElement('li');
+    li.className = 'turn turn-tools';
+    const details = document.createElement('details');
+    details.className = 'tools-group';
+    if (open) details.open = true;
+    const summary = document.createElement('summary');
+    summary.textContent = '🔧 ' + steps.length + (steps.length === 1 ? ' step' : ' steps');
+    details.appendChild(summary);
+    const list = document.createElement('ul');
+    list.className = 'tool-steps';
+    for (const s of steps) list.appendChild(renderToolStep(s));
+    details.appendChild(list);
+    li.appendChild(details);
+    return li;
+  }
+
+  // Update an existing <li.turn.turn-tools> in place with a new step count and
+  // extra step rows. Called when an SSE delta extends the trailing group so the
+  // user's open/closed choice survives the update.
+  function extendToolsGroup(li, newSteps) {
+    const details = li.querySelector('details.tools-group');
+    if (!details) return;
+    const list = details.querySelector('ul.tool-steps');
+    if (!list) return;
+    const summary = details.querySelector('summary');
+    const total = list.children.length + newSteps.length;
+    if (summary) summary.textContent = '🔧 ' + total + (total === 1 ? ' step' : ' steps');
+    const frag = document.createDocumentFragment();
+    for (const s of newSteps) frag.appendChild(renderToolStep(s));
+    list.appendChild(frag);
+  }
+
   function renderTurn(t) {
+    if (t.role === 'system') return renderSystemTurn(t);
     const li = document.createElement('li');
     li.className = 'turn turn-' + (t.role || 'user');
     const head = document.createElement('div');
@@ -73,6 +125,15 @@
     head.appendChild(ts);
     li.appendChild(head);
 
+    if (t.text) {
+      const body = document.createElement('div');
+      body.className = 'turn-body';
+      body.textContent = t.text;
+      li.appendChild(body);
+    }
+    // An assistant turn carrying prose can still have a tool call attached;
+    // render it as a one-row tool line so the reader sees what Claude went on
+    // to do after the prose.
     if (t.tool) {
       const row = document.createElement('div');
       row.className = 'turn-tool';
@@ -85,49 +146,104 @@
       args.textContent = t.tool.args || '';
       row.appendChild(args);
       li.appendChild(row);
-      if (t.text) {
-        const detail = document.createElement('details');
-        detail.className = 'tool-detail';
-        const summary = document.createElement('summary');
-        summary.textContent = 'thinking / preface';
-        detail.appendChild(summary);
-        const pre = document.createElement('pre');
-        pre.textContent = t.text;
-        detail.appendChild(pre);
-        li.appendChild(detail);
-      }
-    } else if (t.text) {
-      const body = document.createElement('div');
-      body.className = 'turn-body';
-      body.textContent = t.text;
-      li.appendChild(body);
     }
     return li;
   }
 
+  // The system turn is a compact grey chip: the one-line summary is visible,
+  // the full raw body sits inside a <details> and expands on tap.
+  function renderSystemTurn(t) {
+    const li = document.createElement('li');
+    li.className = 'turn turn-system';
+    const details = document.createElement('details');
+    details.className = 'system-detail';
+    const summary = document.createElement('summary');
+    summary.className = 'system-summary';
+    summary.textContent = t.summary || 'system message';
+    details.appendChild(summary);
+    if (t.text) {
+      const pre = document.createElement('pre');
+      pre.className = 'system-body';
+      pre.textContent = t.text;
+      details.appendChild(pre);
+    }
+    li.appendChild(details);
+    return li;
+  }
+
+  // isToolTurn: an assistant turn whose body is nothing but a tool call. A
+  // tool call carrying prose breaks the folding group so the user still sees
+  // the text that explains the call.
+  function isToolTurn(t) {
+    return t && t.role === 'assistant' && t.tool && !(t.text && t.text.length > 0);
+  }
+
+  // FOLD_MIN: runs of this many consecutive tool-only assistant turns fold
+  // into a single chip. A lone tool call stays as its own row — a one-step
+  // "🔧 1 steps" chip would hide one line to save none.
+  const FOLD_MIN = 2;
+
+  // Walk a list of turns and build a fragment that folds runs of >=FOLD_MIN
+  // consecutive tool-only assistant turns into a single collapsed group chip.
+  // The FOLD_MIN check lives here so append/prepend share the same invariant.
+  function foldTurnsIntoFragment(turns) {
+    const frag = document.createDocumentFragment();
+    let i = 0;
+    while (i < turns.length) {
+      const t = turns[i];
+      if (isToolTurn(t)) {
+        const run = [];
+        while (i < turns.length && isToolTurn(turns[i])) {
+          run.push(turns[i]);
+          i++;
+        }
+        if (run.length >= FOLD_MIN) {
+          frag.appendChild(renderToolsGroup(run, false));
+        } else {
+          for (const r of run) frag.appendChild(renderTurn(r));
+        }
+      } else {
+        frag.appendChild(renderTurn(t));
+        i++;
+      }
+    }
+    return frag;
+  }
+
+  // Append a list of turns. When the incoming run starts with tool turns and
+  // the DOM already ends with a tool group, extend that existing group instead
+  // of starting a new one so the user's open/closed choice is kept.
   function appendTurns(turns) {
     if (!turns || turns.length === 0) return;
     const wasBottom = isAtBottom();
-    const frag = document.createDocumentFragment();
-    for (const t of turns) frag.appendChild(renderTurn(t));
-    turnsEl.appendChild(frag);
+    let i = 0;
+    const lastLi = turnsEl.lastElementChild;
+    if (lastLi && lastLi.classList.contains('turn-tools') && isToolTurn(turns[0])) {
+      const run = [];
+      while (i < turns.length && isToolTurn(turns[i])) {
+        run.push(turns[i]);
+        i++;
+      }
+      extendToolsGroup(lastLi, run);
+    }
+    turnsEl.appendChild(foldTurnsIntoFragment(turns.slice(i)));
     emptyEl.hidden = turnsEl.children.length > 0;
     if (wasBottom) window.scrollTo({ top: document.body.scrollHeight });
   }
 
   function resetTurns(turns) {
-    turnsEl.innerHTML = '';
+    turnsEl.replaceChildren();
     appendTurns(turns);
     window.scrollTo({ top: document.body.scrollHeight });
   }
 
-  // Older turns go above without moving what the reader is looking at.
+  // Older turns go above without moving what the reader is looking at. A run
+  // that touches the top of the visible list is NOT merged with it, because
+  // the caller is paging back and we want each page's groups to stay distinct.
   function prependTurns(turns) {
     if (!turns || turns.length === 0) return;
     const before = document.body.scrollHeight;
-    const frag = document.createDocumentFragment();
-    for (const t of turns) frag.appendChild(renderTurn(t));
-    turnsEl.insertBefore(frag, turnsEl.firstChild);
+    turnsEl.insertBefore(foldTurnsIntoFragment(turns), turnsEl.firstChild);
     emptyEl.hidden = turnsEl.children.length > 0;
     window.scrollBy(0, document.body.scrollHeight - before);
   }

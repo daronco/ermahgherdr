@@ -288,6 +288,164 @@ func TestWatchTranscriptEmitsResetThenDelta(t *testing.T) {
 	}
 }
 
+// classifyHarnessText turns the harness wrappers Claude Code injects as
+// user-role rows into system rows so the PWA can render a compact chip.
+func TestClassifyHarnessText(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		in      string
+		role    string
+		summary string
+	}{
+		{
+			"task-notification",
+			`<task-notification type="done"><summary>Agent "foo" completed</summary><payload>...</payload></task-notification>`,
+			"system",
+			`Agent "foo" completed`,
+		},
+		{
+			"task-notification-with-entities",
+			`<task-notification><summary>Agent &quot;x&quot; done &amp; happy</summary></task-notification>`,
+			"system",
+			`Agent "x" done & happy`,
+		},
+		{
+			"system-reminder",
+			"<system-reminder>cmd &amp;&amp; echo &gt;&gt; file\nextra",
+			"system",
+			"system-reminder: cmd && echo >> file",
+		},
+		{
+			"command-name",
+			"<command-name>/base</command-name>\n<command-message>…</command-message>",
+			"system",
+			"command-name: /base",
+		},
+		{
+			"command-message",
+			"<command-message>Loading /base…</command-message>",
+			"system",
+			"command-message: Loading /base…",
+		},
+		{
+			"local-command-stdout",
+			"<local-command-stdout>SessionStart hook ok",
+			"system",
+			"local-command-stdout: SessionStart hook ok",
+		},
+		{
+			"plain-user",
+			"hello world",
+			"",
+			"",
+		},
+		{
+			"only-mentions-tag",
+			"please update the <system-reminder> rendering",
+			"",
+			"",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			role, summary, ok := classifyHarnessText(c.in)
+			if (role != "" || summary != "") != ok {
+				t.Fatalf("inconsistent ok=%v role=%q summary=%q", ok, role, summary)
+			}
+			if role != c.role || summary != c.summary {
+				t.Errorf("classifyHarnessText(%q)\n got role=%q summary=%q\nwant role=%q summary=%q",
+					c.in, role, summary, c.role, c.summary)
+			}
+		})
+	}
+}
+
+// Harness rows must come out of parseTurn as role=system, with the full raw
+// text preserved on Turn.Text and a compact label on Turn.Summary.
+func TestParseTurnReclassifiesHarnessRows(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		role    string
+		summary string
+	}{
+		{
+			"task-notification",
+			`<task-notification type="agent-complete"><summary>Agent "foo" completed</summary><payload>payload</payload></task-notification>`,
+			"system",
+			`Agent "foo" completed`,
+		},
+		{
+			"system-reminder",
+			"<system-reminder>cmd &amp;&amp; echo &gt;&gt; file\nextra</system-reminder>",
+			"system",
+			"system-reminder: cmd && echo >> file",
+		},
+		{
+			"command-name",
+			"<command-name>/base</command-name>",
+			"system",
+			"command-name: /base",
+		},
+		{
+			"plain-user",
+			"hello world",
+			"user",
+			"",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			line, _ := json.Marshal(map[string]any{
+				"type":      "user",
+				"timestamp": "2026-10-12T20:00:00.000Z",
+				"message":   map[string]any{"role": "user", "content": c.content},
+			})
+			turn, ok := parseTurn(line)
+			if !ok {
+				t.Fatalf("parseTurn returned ok=false for %q", c.content)
+			}
+			if turn.Role != c.role {
+				t.Errorf("role: got %q want %q", turn.Role, c.role)
+			}
+			if turn.Summary != c.summary {
+				t.Errorf("summary: got %q want %q", turn.Summary, c.summary)
+			}
+			if turn.Text != c.content {
+				t.Errorf("text: got %q want %q (full raw body preserved)", turn.Text, c.content)
+			}
+		})
+	}
+}
+
+// A structured-content user row (list of {type:text}) with a harness wrapper
+// in its accumulated text must also classify as system.
+func TestParseTurnStructuredHarnessReclassifies(t *testing.T) {
+	raw := `<task-notification><summary>Hello summary</summary></task-notification>`
+	line, _ := json.Marshal(map[string]any{
+		"type":      "user",
+		"timestamp": "2026-10-12T20:00:00.000Z",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "text", "text": raw},
+			},
+		},
+	})
+	turn, ok := parseTurn(line)
+	if !ok {
+		t.Fatal("parseTurn returned ok=false")
+	}
+	if turn.Role != "system" {
+		t.Errorf("role: got %q want system", turn.Role)
+	}
+	if turn.Summary != "Hello summary" {
+		t.Errorf("summary: got %q want %q", turn.Summary, "Hello summary")
+	}
+	if turn.Text != raw {
+		t.Errorf("text: got %q want %q", turn.Text, raw)
+	}
+}
+
 // extractPromptText pulls the asked-for question out of a pane body so the
 // permission banner carries the real text rather than a generic placeholder.
 func TestExtractPromptText(t *testing.T) {
