@@ -20,6 +20,27 @@
   const connEl = document.getElementById('conv-conn');
   const turnsEl = document.getElementById('turns');
   const emptyEl = document.getElementById('conv-empty');
+
+  // Stack the sticky tab strip and permission banner under the real header
+  // heights; they change with the safe-area inset and the title wrapping.
+  (function syncStickyOffsets() {
+    const bar = document.querySelector('.topbar');
+    const tabs = document.querySelector('.tabs');
+    if (!bar || !tabs) return;
+    const apply = () => {
+      const root = document.documentElement.style;
+      root.setProperty('--topbar-h', bar.offsetHeight + 'px');
+      root.setProperty('--sticky-under-tabs', (bar.offsetHeight + tabs.offsetHeight) + 'px');
+    };
+    apply();
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(apply);
+      ro.observe(bar);
+      ro.observe(tabs);
+    } else {
+      window.addEventListener('resize', apply);
+    }
+  })();
   const permEl = document.getElementById('perm-banner');
   const permBodyEl = document.getElementById('perm-body');
   const permChoicesEl = document.getElementById('perm-choices');
@@ -278,7 +299,10 @@
   // the DOM already ends with a tool group, extend that existing group instead
   // of starting a new one so the user's open/closed choice is kept.
   function appendTurns(turns) {
-    if (!turns || turns.length === 0) return;
+    if (!turns || turns.length === 0) {
+      emptyEl.hidden = turnsEl.children.length > 0;
+      return;
+    }
     for (const t of turns) {
       if (!t._pending) reconcilePendingEcho(t);
       if (t.role === 'user' && !t._pending) {

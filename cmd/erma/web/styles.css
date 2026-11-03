@@ -142,8 +142,11 @@ main { padding: 8px 10px 24px; max-width: 760px; margin: 0 auto; }
 
 .conv-main { max-width: 760px; margin: 0 auto; padding: 10px; }
 
+/* Sticky offsets come from the real topbar/tab heights (set by conversation.js):
+   fixed pixels hid the banner under the tabs, worse with a safe-area inset. */
 .perm-banner {
-  position: sticky; top: 54px; z-index: 2;
+  position: sticky; top: var(--sticky-under-tabs, 86px); z-index: 2;
+  max-height: 45vh; overflow-y: auto;
   margin: 8px 10px; padding: 10px 12px;
   background: var(--row-urgent); border-left: 4px solid var(--urgent);
   border-radius: 6px;
@@ -461,7 +464,7 @@ body.state-idle   .strip-state  { color: var(--paused); }
    Tab strip + Terminal tab (session view)
    ------------------------------------------------------------------ */
 .tabs {
-  position: sticky; top: 44px; z-index: 4;
+  position: sticky; top: var(--topbar-h, 44px); z-index: 4;
   display: flex; gap: 0;
   background: #181818;
   background-clip: padding-box;
