@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 // writeTranscript builds a Claude-shaped projects root at tmp/.claude/projects/
@@ -668,7 +669,9 @@ func TestParseTurnReclassifiesCompactionSummary(t *testing.T) {
 }
 
 // User rows carry pasted blocks inline as <pasted_content id="…">…</pasted_content>.
-// The parser strips the wrappers and reports the byte range of each inner block.
+// The parser strips the wrappers and reports the UTF-16 code-unit range of
+// each inner block — the unit JS String.prototype.slice indexes in, so the
+// client can forward spans straight to text.slice without a re-encoding step.
 func TestParseTurnUnwrapsPastedBlocks(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -694,6 +697,28 @@ func TestParseTurnUnwrapsPastedBlocks(t *testing.T) {
 			"head\nline1\nline2\ntail",
 			[]PastedSpan{{Start: 5, End: 16}},
 		},
+		{
+			// Accented letters outside the pasted block push the UTF-16 start
+			// past the equivalent byte offset — "café " is 5 bytes but 5 code
+			// units (é is U+00E9, one unit), so for latin-1-ish prose offsets
+			// still line up. The surrogate-pair case below is the one that
+			// used to misfire.
+			"non-ascii-around-and-inside-block",
+			`café <pasted_content id="1">naïve</pasted_content> ☕`,
+			`café naïve ☕`,
+			[]PastedSpan{{Start: 5, End: 10}},
+		},
+		{
+			// 🙂 is U+1F642, a supplementary-plane code point: 4 bytes in
+			// UTF-8, 2 UTF-16 code units. Spans are in code units, so the
+			// outer emoji counts as 2 and the inner emoji contributes 2 to
+			// the span width — a byte-offset client would land in the middle
+			// of a surrogate pair here.
+			"supplementary-plane-emoji-in-and-out-of-block",
+			`🙂 <pasted_content id="1">a🙂b</pasted_content> end`,
+			`🙂 a🙂b end`,
+			[]PastedSpan{{Start: 3, End: 7}},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -715,12 +740,17 @@ func TestParseTurnUnwrapsPastedBlocks(t *testing.T) {
 			if len(turn.Pasted) != len(c.wantPast) {
 				t.Fatalf("pasted spans: got %d want %d (%+v)", len(turn.Pasted), len(c.wantPast), turn.Pasted)
 			}
+			// Spans index UTF-16 code units — the same unit JS slice uses.
+			// Simulate the JS consumer: encode both strings to UTF-16, slice
+			// at the span offsets, decode back, and compare.
+			gotU16 := utf16.Encode([]rune(turn.Text))
+			wantU16 := utf16.Encode([]rune(c.wantText))
 			for i, want := range c.wantPast {
 				if turn.Pasted[i] != want {
 					t.Errorf("span %d: got %+v want %+v", i, turn.Pasted[i], want)
 				}
-				got := turn.Text[turn.Pasted[i].Start:turn.Pasted[i].End]
-				wantInner := c.wantText[want.Start:want.End]
+				got := string(utf16.Decode(gotU16[turn.Pasted[i].Start:turn.Pasted[i].End]))
+				wantInner := string(utf16.Decode(wantU16[want.Start:want.End]))
 				if got != wantInner {
 					t.Errorf("span %d body: got %q want %q", i, got, wantInner)
 				}

@@ -187,10 +187,9 @@
 
   // Build a user turn body that interleaves raw text segments with pasted
   // blocks. Each pasted span is wrapped in a labelled container; the server
-  // sends byte offsets, but the text runs we hand to textContent are indexed
-  // by JS string offsets. Pasted bodies the server emits are ASCII-stable in
-  // practice (they come straight from the user's clipboard), and the inner
-  // text is reproduced verbatim by slicing the whole string by those offsets.
+  // sends offsets measured in UTF-16 code units — the same unit String.slice
+  // and String.length use — so slicing `text` by them is correct for every
+  // Unicode input, including emoji that live in the supplementary planes.
   // DOM APIs only — never innerHTML.
   function appendUserBodyWithPasted(body, text, spans) {
     let prev = 0;
@@ -200,13 +199,13 @@
       if (span.start > prev) {
         body.appendChild(document.createTextNode(text.slice(prev, span.start)));
       }
-      const block = document.createElement('span');
+      const block = document.createElement('div');
       block.className = 'pasted-block';
       const label = document.createElement('span');
       label.className = 'pasted-label';
       label.textContent = 'pasted';
       block.appendChild(label);
-      const inner = document.createElement('span');
+      const inner = document.createElement('div');
       inner.className = 'pasted-body';
       inner.textContent = text.slice(span.start, span.end);
       block.appendChild(inner);
