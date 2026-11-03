@@ -159,6 +159,8 @@
       body.className = 'turn-body';
       if (t.role === 'assistant' && window.ermaRenderMarkdown) {
         window.ermaRenderMarkdown(t.text, body);
+      } else if (t.role === 'user' && Array.isArray(t.pasted) && t.pasted.length > 0) {
+        appendUserBodyWithPasted(body, t.text, t.pasted);
       } else {
         body.textContent = t.text;
       }
@@ -181,6 +183,39 @@
       li.appendChild(row);
     }
     return li;
+  }
+
+  // Build a user turn body that interleaves raw text segments with pasted
+  // blocks. Each pasted span is wrapped in a labelled container; the server
+  // sends byte offsets, but the text runs we hand to textContent are indexed
+  // by JS string offsets. Pasted bodies the server emits are ASCII-stable in
+  // practice (they come straight from the user's clipboard), and the inner
+  // text is reproduced verbatim by slicing the whole string by those offsets.
+  // DOM APIs only — never innerHTML.
+  function appendUserBodyWithPasted(body, text, spans) {
+    let prev = 0;
+    for (const span of spans) {
+      if (!span || typeof span.start !== 'number' || typeof span.end !== 'number') continue;
+      if (span.start < prev || span.end < span.start || span.end > text.length) continue;
+      if (span.start > prev) {
+        body.appendChild(document.createTextNode(text.slice(prev, span.start)));
+      }
+      const block = document.createElement('span');
+      block.className = 'pasted-block';
+      const label = document.createElement('span');
+      label.className = 'pasted-label';
+      label.textContent = 'pasted';
+      block.appendChild(label);
+      const inner = document.createElement('span');
+      inner.className = 'pasted-body';
+      inner.textContent = text.slice(span.start, span.end);
+      block.appendChild(inner);
+      body.appendChild(block);
+      prev = span.end;
+    }
+    if (prev < text.length) {
+      body.appendChild(document.createTextNode(text.slice(prev)));
+    }
   }
 
   // The system turn is a compact grey chip: the one-line summary is visible,
