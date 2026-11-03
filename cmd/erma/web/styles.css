@@ -397,6 +397,66 @@ main { padding: 8px 10px 24px; max-width: 760px; margin: 0 auto; }
 /* Prominent whole-page urgent tint when the banner is up. */
 body.state-urgent .topbar { background: #241a2e; }
 
+/* Live status strip pinned above the composer. The bottom offset is kept in
+   sync with the composer's measured height from conversation.js, so a growing
+   send-warn / replybox doesn't cover the strip. */
+.status-strip {
+  position: fixed; left: 0; right: 0;
+  bottom: 128px; z-index: 2;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px;
+  background: #141414;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  color: var(--calm); font-size: 12px;
+}
+.strip-state {
+  font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--calm);
+}
+.strip-tool {
+  color: var(--ctx);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 1;
+}
+.strip-tool:empty { display: none; }
+.strip-elapsed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--meta);
+}
+
+body.state-proc   .status-strip { border-top-color: var(--proc); }
+body.state-proc   .strip-state  { color: var(--proc); }
+body.state-urgent .status-strip { border-top-color: var(--urgent); background: #241a2e; }
+body.state-urgent .strip-state  { color: var(--urgent); }
+body.state-done   .status-strip { border-top-color: var(--done); }
+body.state-done   .strip-state  { color: var(--done); }
+body.state-idle   .status-strip { border-top-color: var(--rule); }
+body.state-idle   .strip-state  { color: var(--paused); }
+
+/* Pending echo: the user's turn is on screen before the server has acked it. */
+.turn-pending {
+  opacity: 0.65;
+  border-left-color: var(--paused);
+}
+.turn-pending .turn-ts::after {
+  content: ' · sending…';
+  color: var(--meta);
+  font-style: italic;
+}
+.turn-failed {
+  opacity: 0.95;
+  border-left-color: #e05b57;
+}
+.turn-failed .turn-ts::after {
+  content: ' · failed';
+  color: #e05b57;
+  font-weight: 600;
+  font-style: normal;
+}
+
 /* ------------------------------------------------------------------
    Tab strip + Terminal tab (session view)
    ------------------------------------------------------------------ */

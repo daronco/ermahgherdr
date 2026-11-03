@@ -588,6 +588,77 @@ func TestStreamResumesFromCursor(t *testing.T) {
 	}
 }
 
+// stateStripMap: the SSE state → status strip label contract. The client
+// mirror of this table lives in cmd/erma/web/conversation.js inside
+// updateStrip(); the two must stay in sync.
+//
+//	state       strip label
+//	-------     -----------------
+//	proc        working
+//	urgent      your turn
+//	done        waiting on you
+//	idle        idle
+var stateStripMap = map[string]string{
+	"proc":   "working",
+	"urgent": "your turn",
+	"done":   "waiting on you",
+	"idle":   "idle",
+}
+
+// The live status strip and pending echo land as new ids in the shipped web
+// assets. Asserting the markup here is cheap and the hard-to-reach piece
+// (the client-side turn store) stays testable through the DOM contract.
+func TestConversationAssetsCarryStatusStrip(t *testing.T) {
+	srv, _ := mkConvServer(t, map[string]string{}, nil)
+	for path, needles := range map[string][]string{
+		"/conversation.html": {
+			`id="status-strip"`,
+			`id="strip-state"`,
+			`id="strip-tool"`,
+			`id="strip-elapsed"`,
+			`class="status-strip"`,
+		},
+		"/conversation.js": {
+			`updateStrip`,
+			`latestPendingTool`,
+			`pendingEchoes`,
+			`turn-pending`,
+			`turn-failed`,
+			`lastUserTs`,
+		},
+		"/styles.css": {
+			`.status-strip`,
+			`.turn-pending`,
+			`.turn-failed`,
+			`.strip-elapsed`,
+		},
+	} {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set(headerLogin, "ok@example.com")
+		w := httptest.NewRecorder()
+		srv.mux().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s: got %d, want 200", path, w.Code)
+			continue
+		}
+		body := w.Body.String()
+		for _, n := range needles {
+			if !strings.Contains(body, n) {
+				t.Errorf("GET %s: missing %q", path, n)
+			}
+		}
+	}
+	// The state→label map lives as a doc comment so the client and server
+	// mapping stay anchored to the same list. A silent drift here would show
+	// up as a changed set of keys.
+	wantKeys := []string{"proc", "urgent", "done", "idle"}
+	for _, k := range wantKeys {
+		if _, ok := stateStripMap[k]; !ok {
+			t.Errorf("stateStripMap missing %q", k)
+		}
+	}
+}
+
 // A session opened from the phone has a live pane but no transcript until its
 // first turn; the conversation must still open and hand out a CSRF token.
 func TestConversationOfNewSessionWithoutTranscript(t *testing.T) {

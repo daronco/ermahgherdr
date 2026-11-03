@@ -29,6 +29,10 @@
   const earlierBtn = document.getElementById('earlier');
   const toastEl = document.getElementById('toast');
   const sendWarnEl = document.getElementById('send-warn');
+  const stripEl = document.getElementById('status-strip');
+  const stripStateEl = document.getElementById('strip-state');
+  const stripToolEl = document.getElementById('strip-tool');
+  const stripElapsedEl = document.getElementById('strip-elapsed');
 
   // The CSRF token issued by GET /conversation. Needed on every POST. The
   // conversation GET refreshes it; if we have none yet, state-changing POSTs
@@ -46,6 +50,18 @@
   let cursor = 0;
   let start = 0;
   let toastTimer = 0;
+  // Pending echoes awaiting their matching user turn from the server. Each
+  // entry is {_localId, text}; the DOM node carries data-local-id to match.
+  const pendingEchoes = [];
+  // Parallel store of rendered turns, oldest-first, used by latestPendingTool
+  // to find the tool call that is still in flight. Grows for the lifetime of
+  // the page — fine for a session, trim if long-running conversations become
+  // common.
+  const allTurns = [];
+  // Timestamp of the newest user message — either sent locally or arrived on
+  // the stream. The elapsed counter in the status strip reads from here.
+  let lastUserTs = Date.now();
+  let elapsedTimer = 0;
 
   function setConn(state) {
     connEl.className = 'status ' + state;
@@ -122,6 +138,10 @@
     if (t.role === 'system') return renderSystemTurn(t);
     const li = document.createElement('li');
     li.className = 'turn turn-' + (t.role || 'user');
+    if (t._pending) {
+      li.classList.add('turn-pending');
+      if (t._localId) li.dataset.localId = t._localId;
+    }
     const head = document.createElement('div');
     head.className = 'turn-head';
     const role = document.createElement('span');
@@ -223,11 +243,51 @@
     return frag;
   }
 
+  // Drop a pending echo whose text matches an inbound server user turn. The
+  // DOM node (keyed by data-local-id) is removed before the real turn gets
+  // inserted, so the reader never sees two copies of the same message.
+  function reconcilePendingEcho(t) {
+    if (!t || t.role !== 'user' || !t.text) return;
+    const needle = t.text.trim();
+    for (let i = 0; i < pendingEchoes.length; i++) {
+      if (pendingEchoes[i].text.trim() !== needle) continue;
+      const localId = pendingEchoes[i]._localId;
+      pendingEchoes.splice(i, 1);
+      const li = turnsEl.querySelector('li[data-local-id="' + CSS.escape(localId) + '"]');
+      if (li) li.remove();
+      // Also strip the pending twin out of the parallel turn store.
+      for (let j = allTurns.length - 1; j >= 0; j--) {
+        if (allTurns[j]._pending && allTurns[j]._localId === localId) {
+          allTurns.splice(j, 1);
+          break;
+        }
+      }
+      return;
+    }
+  }
+
+  // Note the arrival of a user turn (either sent locally or seen on the
+  // stream) and reset the elapsed counter so the strip tracks "time since the
+  // last thing the user said" rather than "time since page load".
+  function noteUserTurn(ts) {
+    lastUserTs = ts || Date.now();
+    tickElapsed();
+  }
+
   // Append a list of turns. When the incoming run starts with tool turns and
   // the DOM already ends with a tool group, extend that existing group instead
   // of starting a new one so the user's open/closed choice is kept.
   function appendTurns(turns) {
     if (!turns || turns.length === 0) return;
+    for (const t of turns) {
+      if (!t._pending) reconcilePendingEcho(t);
+      if (t.role === 'user' && !t._pending) {
+        // Prefer the turn's own timestamp — a batch of historical turns on
+        // reconnect or boot would otherwise reset the counter to now.
+        const ts = t.ts ? new Date(t.ts).getTime() : Date.now();
+        noteUserTurn(ts);
+      }
+    }
     const wasBottom = isAtBottom();
     let i = 0;
     const lastLi = turnsEl.lastElementChild;
@@ -240,12 +300,15 @@
       extendToolsGroup(lastLi, run);
     }
     turnsEl.appendChild(foldTurnsIntoFragment(turns.slice(i)));
+    for (const t of turns) allTurns.push(t);
     emptyEl.hidden = turnsEl.children.length > 0;
     if (wasBottom) window.scrollTo({ top: document.body.scrollHeight });
+    updateStrip();
   }
 
   function resetTurns(turns) {
     turnsEl.replaceChildren();
+    allTurns.length = 0;
     appendTurns(turns);
     window.scrollTo({ top: document.body.scrollHeight });
   }
@@ -257,6 +320,7 @@
     if (!turns || turns.length === 0) return;
     const before = document.body.scrollHeight;
     turnsEl.insertBefore(foldTurnsIntoFragment(turns), turnsEl.firstChild);
+    for (let i = turns.length - 1; i >= 0; i--) allTurns.unshift(turns[i]);
     emptyEl.hidden = turnsEl.children.length > 0;
     window.scrollBy(0, document.body.scrollHeight - before);
   }
@@ -264,6 +328,69 @@
   function setStart(s) {
     start = s || 0;
     earlierBtn.hidden = start <= 0;
+  }
+
+  // latestPendingTool: walk the turn store from the tail for the newest
+  // assistant turn carrying a tool block that has no later tool_result turn.
+  // That's the tool currently running — the CLI spinner shows the same thing.
+  // Assumes sequential tool execution: any later tool_result is treated as the
+  // match. Parallel tool calls would need result-id correlation.
+  function latestPendingTool() {
+    for (let i = allTurns.length - 1; i >= 0; i--) {
+      const t = allTurns[i];
+      if (!(t.role === 'assistant' && t.tool)) continue;
+      let hasResult = false;
+      for (let j = i + 1; j < allTurns.length; j++) {
+        if (allTurns[j].role === 'tool_result') { hasResult = true; break; }
+      }
+      if (!hasResult) return (t.tool && t.tool.name) || '';
+    }
+    return '';
+  }
+
+  function fmtElapsed(ms) {
+    if (ms < 0) ms = 0;
+    const total = Math.floor(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
+
+  function tickElapsed() {
+    if (!stripElapsedEl) return;
+    stripElapsedEl.textContent = fmtElapsed(Date.now() - lastUserTs);
+  }
+
+  function startElapsedTimer() {
+    if (elapsedTimer) return;
+    tickElapsed();
+    elapsedTimer = setInterval(tickElapsed, 1000);
+  }
+
+  function stopElapsedTimer() {
+    if (!elapsedTimer) return;
+    clearInterval(elapsedTimer);
+    elapsedTimer = 0;
+  }
+
+  // updateStrip refreshes the state label and the running tool from the
+  // current turn store and the last seen SSE state. It runs on both state
+  // updates and delta appends — nothing polls.
+  function updateStrip() {
+    if (!stripEl) return;
+    let label;
+    switch (lastKnownState) {
+      case 'proc':   label = 'working'; break;
+      case 'urgent': label = 'your turn'; break;
+      case 'done':   label = 'waiting on you'; break;
+      case 'idle':   label = 'idle'; break;
+      default:       label = lastKnownState || 'idle';
+    }
+    if (stripStateEl) stripStateEl.textContent = label;
+    if (stripToolEl) {
+      const tool = lastKnownState === 'proc' ? latestPendingTool() : '';
+      stripToolEl.textContent = tool;
+    }
   }
 
   function applyState(row) {
@@ -299,6 +426,7 @@
     if (row.sub > 0) parts.push('⤷' + row.sub);
     badgeEl.textContent = parts.join(' · ');
     renderPermBanner();
+    updateStrip();
   }
 
   // The permission banner shows whenever the row is `urgent`. The server parses
@@ -417,6 +545,21 @@
       showSendWarn('The Claude input box already has text. Tap Send again to append, or press ^C / Esc to clear it first.');
       return;
     }
+    // Pending echo: show the user's message in the transcript immediately.
+    // The matching server turn — once it arrives on the SSE delta — replaces
+    // this node via reconcilePendingEcho(). On HTTP failure the node is kept
+    // and marked turn-failed so the user can see the send didn't land.
+    const localId = 'pe-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    const pending = {
+      role: 'user',
+      ts: new Date(),
+      text,
+      _pending: true,
+      _localId: localId,
+    };
+    pendingEchoes.push({ _localId: localId, text });
+    appendTurns([pending]);
+    noteUserTurn(Date.now());
     sendBtn.disabled = true;
     try {
       const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/text', {
@@ -426,15 +569,35 @@
       });
       if (!res.ok) {
         console.warn('text', res.status);
+        markPendingFailed(localId);
       } else {
         replyEl.value = '';
         sendConfirm = false;
         clearSendWarn();
         showToast('sent');
       }
+    } catch (e) {
+      console.warn('text', e);
+      markPendingFailed(localId);
     } finally {
       sendBtn.disabled = false;
       replyEl.focus();
+    }
+  }
+
+  function markPendingFailed(localId) {
+    const li = turnsEl.querySelector('li[data-local-id="' + CSS.escape(localId) + '"]');
+    if (li) {
+      li.classList.remove('turn-pending');
+      li.classList.add('turn-failed');
+    }
+    // The echo is no longer waiting on a server match — a late user turn on
+    // the stream (manual retry, server echo) should not reconcile against it.
+    for (let i = 0; i < pendingEchoes.length; i++) {
+      if (pendingEchoes[i]._localId === localId) {
+        pendingEchoes.splice(i, 1);
+        break;
+      }
     }
   }
 
@@ -537,6 +700,35 @@
     });
   }
 
+  // Keep the strip clear of the composer: when the reply box or send-warn
+  // grows the composer taller, the strip has to move up with it. ResizeObserver
+  // ships in every browser that supports PWAs and SSE, so no fallback needed.
+  function syncStripOffset() {
+    if (!stripEl) return;
+    const composerEl = document.querySelector('#tab-conversation > .composer');
+    if (!composerEl) return;
+    stripEl.style.bottom = composerEl.offsetHeight + 'px';
+  }
+  (function wireStripOffset() {
+    const composerEl = document.querySelector('#tab-conversation > .composer');
+    if (!composerEl || typeof ResizeObserver === 'undefined') {
+      syncStripOffset();
+      return;
+    }
+    const ro = new ResizeObserver(syncStripOffset);
+    ro.observe(composerEl);
+    syncStripOffset();
+  })();
+
+  // Pause the ticker while the tab is hidden — the browser throttles timers in
+  // background anyway, and letting the counter idle avoids visible drift on
+  // resume (we recompute from lastUserTs the moment the page comes back).
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopElapsedTimer();
+    else startElapsedTimer();
+  });
+  startElapsedTimer();
+
   // Boot.
   (async function boot() {
     try {
@@ -549,6 +741,7 @@
       console.error('boot', e);
     }
     connect();
+    updateStrip();
   })();
 
   // Tab bar wiring. The Terminal tab panel owns its own polling loop in
