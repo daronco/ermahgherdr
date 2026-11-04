@@ -589,7 +589,12 @@
     dirEl.textContent = row.dir || '';
     dirEl.hidden = !row.dir;
     updatePill(row);
-    if (emptyDirEl) emptyDirEl.textContent = row.dir || '';
+    if (emptyDirEl) {
+      emptyDirEl.textContent = row.dir || '';
+      emptyDirEl.hidden = !row.dir;
+      const inEl = document.getElementById('conv-empty-sub-in');
+      if (inEl) inEl.hidden = !row.dir;
+    }
     renderPermBanner();
     updateStrip();
   }
