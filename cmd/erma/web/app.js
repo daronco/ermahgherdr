@@ -141,7 +141,9 @@
       // apiSession has no tool/args field today, so we render the plain state
       // word. The spec allows this fallback until the stream carries live
       // tool-call info.
-      return [{ text: 'Working', cls: 'sub-work' }];
+      const parts = [{ text: 'Working', cls: 'sub-work' }];
+      if (s.sub > 0) parts.push({ text: ' · ' + s.sub + (s.sub === 1 ? ' subagent' : ' subagents') });
+      return parts;
     }
     if (s.state === 'done') {
       // The last-reply preview is deferred — the stream doesn't carry it yet.
@@ -158,9 +160,9 @@
       if (!isNaN(ctx) && ctx >= 0) parts.push('ctx ' + ctx + '%');
       return [{ text: parts.join(' · ') }];
     }
-    // Plain idle.
+    // Plain idle. `sub` counts subagents, not turns, so it says nothing
+    // about whether the session has talked yet.
     const parts = ['Idle'];
-    if (!s.sub || s.sub === 0) parts.push('no turns yet');
     const pane = paneLabel(s.pane);
     if (pane) parts.push(pane);
     return [{ text: parts.join(' · ') }];
