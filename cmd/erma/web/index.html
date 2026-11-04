@@ -14,22 +14,48 @@
   <header class="topbar">
     <span class="mascot" aria-hidden="true">👾</span>
     <span class="title">erma</span>
-    <span class="counts" id="counts" aria-live="polite"></span>
+    <span class="live" id="live" aria-live="polite">
+      <span class="live-dot" id="live-dot" aria-hidden="true"></span>
+      <span class="live-label">live</span>
+    </span>
     <button id="new-session" class="new-session" type="button" aria-label="new session">＋</button>
-    <span class="status" id="conn" title="SSE connection">·</span>
   </header>
   <main>
-    <ul id="list" class="sessions" aria-live="polite"></ul>
-    <p id="empty" class="empty" hidden>no claude sessions</p>
+    <div id="list" class="sessions" aria-live="polite">
+      <div id="dai-pin" class="dai-pin" hidden></div>
+      <section class="group" data-group="you" id="group-you" hidden>
+        <h2 class="group-head"><span class="group-label">NEEDS YOU</span> <span class="group-count" id="count-you">0</span></h2>
+        <ul class="group-list" id="list-you"></ul>
+      </section>
+      <section class="group" data-group="done" id="group-done" hidden>
+        <h2 class="group-head"><span class="group-label">DONE</span> <span class="group-count" id="count-done">0</span></h2>
+        <ul class="group-list" id="list-done"></ul>
+      </section>
+      <section class="group" data-group="work" id="group-work" hidden>
+        <h2 class="group-head"><span class="group-label">WORKING</span> <span class="group-count" id="count-work">0</span></h2>
+        <ul class="group-list" id="list-work"></ul>
+      </section>
+      <section class="group" data-group="quiet" id="group-quiet" hidden>
+        <h2 class="group-head"><span class="group-label">QUIET</span> <span class="group-count" id="count-quiet">0</span></h2>
+        <ul class="group-list" id="list-quiet"></ul>
+      </section>
+    </div>
+    <section id="empty" class="empty-card" hidden>
+      <span class="empty-mascot" aria-hidden="true">👾</span>
+      <h2 class="empty-title">No Claude sessions</h2>
+      <p class="empty-body">Start one in a recent directory. Sessions you open in tmux on the laptop show up here too.</p>
+      <button id="empty-new" class="btn primary empty-action" type="button">
+        <span class="empty-plus" aria-hidden="true">＋</span> New session
+      </button>
+    </section>
 
     <section id="other-group" class="other-group" hidden>
       <button id="other-toggle" class="other-toggle" type="button" aria-expanded="false">
         <span class="caret">▸</span>
-        <span class="label">Other panes</span>
+        <span class="label">Other tmux panes · view only</span>
         <span class="other-count" id="other-count">0</span>
       </button>
       <ul id="other-list" class="other-list" hidden></ul>
-      <p id="other-hint" class="other-hint" hidden>Read-only: the terminal view opens Claude sessions only.</p>
     </section>
   </main>
 

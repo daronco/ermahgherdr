@@ -89,93 +89,164 @@ body {
   background-clip: padding-box;
   border-bottom: 1px solid var(--line);
 }
-.topbar .mascot { font-size: 20px; filter: saturate(0.6); }
-.topbar .title { font-weight: 600; letter-spacing: 0.4px; color: var(--text); font-size: 15px; }
-.topbar .counts { margin-left: auto; color: var(--text-2); font-variant-numeric: tabular-nums; font-size: 13px; }
-.topbar .counts .u { color: var(--you); margin-left: 8px; }
-.topbar .counts .d { color: var(--done); margin-left: 8px; }
-.topbar .counts .p { color: var(--work); margin-left: 8px; }
-.topbar .counts .z { color: var(--text-3); margin-left: 8px; }
-.topbar .status { color: var(--text-3); font-size: 12px; width: 10px; text-align: center; }
-.topbar .status.live { color: var(--accent); }
-.topbar .status.lost { color: var(--err); }
+.topbar .mascot { font-size: 22px; color: var(--you); filter: saturate(0.95); }
+.topbar .title { font-weight: 700; letter-spacing: 0.3px; color: var(--text); font-size: 17px; }
+.topbar .live {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-2); font-size: 13px;
+}
+.topbar .live-dot {
+  width: 8px; height: 8px; border-radius: 999px;
+  background: var(--off);
+}
+.topbar .live-dot.on { background: var(--accent); }
 
 main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 
-.empty { color: var(--text-3); text-align: center; margin-top: 48px; }
+/* ------------------------------------------------------------------
+   Session list: urgency-sorted groups + optional dai-live pinned row.
+   ------------------------------------------------------------------ */
+.sessions { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
 
-.sessions { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.dai-pin { display: block; }
+
+.group { display: flex; flex-direction: column; gap: 6px; }
+.group-head {
+  display: flex; align-items: baseline; gap: 10px;
+  margin: 0; padding: 0 2px;
+  color: var(--text-2);
+  font: inherit; font-size: 12px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.group-count { color: var(--text-3); font-weight: 600; font-variant-numeric: tabular-nums; }
+.group-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 
 .row {
   display: grid;
-  grid-template-columns: 20px 1fr auto 32px;
-  align-items: center;
-  column-gap: 10px;
-  padding: 10px 12px;
+  grid-template-columns: 24px 1fr;
+  align-items: start;
+  column-gap: 12px;
+  padding: 12px 14px;
   background: var(--surface);
-  border-left: 4px solid transparent;
-  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  cursor: pointer;
 }
-.row.state-idle   { background: var(--surface); border-left-color: transparent; }
-.row.state-done   { background: var(--done-bg); border-left-color: var(--done); }
-.row.state-proc   { background: var(--surface); border-left-color: var(--work); }
-.row.state-urgent { background: var(--you-bg); border-left-color: var(--you); }
-.row.dai          { outline: 1px solid var(--accent-line); }
-.row.paused       { opacity: 0.55; }
+.row.state-idle   { background: var(--surface); }
+.row.state-done   { background: var(--surface); }
+.row.state-proc   { background: var(--surface); }
+.row.state-urgent { background: var(--surface); }
+.row.you-tint     { background: var(--you-bg); border-color: var(--you-line); }
+.row.dai          { background: var(--surface); border-color: var(--accent-line); }
+.row.paused       { opacity: 0.6; }
 .row.paused .name { color: var(--text-3); }
-.row.prio .name   { font-weight: 600; color: var(--text); }
+.row.prio .name   { font-weight: 700; color: var(--text); }
+.row:active       { filter: brightness(1.08); }
 
-.row .glyph { font-size: 15px; text-align: center; line-height: 1; }
+.row .glyph {
+  font-size: 16px; line-height: 1.25;
+  text-align: center;
+  padding-top: 2px;
+  color: var(--idle);
+}
 .row.state-idle   .glyph { color: var(--idle); }
 .row.state-done   .glyph { color: var(--done); }
 .row.state-proc   .glyph { color: var(--work); }
 .row.state-urgent .glyph { color: var(--you); font-weight: 700; }
-.row.dai .glyph { color: var(--dai); }
+.row.paused       .glyph { color: var(--text-3); }
+.row.dai          .glyph { color: var(--dai); }
 
-.row .body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.row .body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.row .row-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  min-width: 0;
+}
+/* Name uses the UX 1/8 `name` type token — single call site. */
 .row .name {
   color: var(--text);
-  font-size: 15px;
+  font-size: 16px; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
 }
-.row .meta { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
-
-.row .marks { display: inline-flex; gap: 6px; color: var(--text-2); font-size: 13px; min-width: 0; }
-.row .marks .prio { color: var(--text); font-weight: 700; }
-.row .marks .paused { color: var(--text-3); }
-
-.row .badge {
-  min-width: 28px; text-align: center;
-  padding: 2px 6px; border-radius: 4px;
-  background: var(--idle); color: var(--on-idle);
-  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+.row .age {
+  color: var(--text-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
-.row.state-urgent .badge { background: var(--you); color: var(--on-you); }
-.row.state-done   .badge { background: var(--done); color: var(--on-done); }
-.row.state-proc   .badge { background: var(--work); color: var(--on-work); }
 
-/* Context meter: a thin bar under the row body. Mirrors the bar's thresholds
-   (70% amber, 85% ctx-purple). Only shown when the server reports a value. */
+/* Second line copy — the colour of the first chunk depends on the state. */
+.row .sub {
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.row .sub .sub-you  { color: var(--you);  font-weight: 700; }
+.row .sub .sub-work { color: var(--work); font-weight: 700; }
+.row.paused .sub,
+.row.state-idle .sub { color: var(--text-3); }
+
+/* Meta line: pane · ctx-bar · ctx NN%. Mono + tabular-nums for dense rows. */
+.row .meta {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.row .meta-pane { white-space: nowrap; }
+.row .meta-ctx  { white-space: nowrap; }
+
+/* Context meter — a neutral grey bar, no urgency colour. */
 .row .ctx {
-  grid-column: 2 / 4;
-  height: 3px; border-radius: 2px; margin-top: 6px;
-  background: linear-gradient(to right, transparent 0, transparent 100%);
-  background-color: var(--line-soft);
+  display: inline-block;
+  width: 72px; height: 4px; border-radius: 2px;
+  background: var(--line-soft);
   overflow: hidden;
 }
 .row .ctx .fill {
   display: block; height: 100%;
-  background: var(--idle); transition: width 0.3s ease;
+  background: var(--idle);
+  transition: width 0.3s ease;
 }
-.row .ctx.warn .fill { background: var(--work); }
-.row .ctx.high .fill { background: var(--you); }
 
-/* Row-tap: the whole row becomes a link to the conversation view. The anchor
-   wraps the row so taps on name, meta or badge all count. */
-.row a.row-link,
-.row a.row-link:visited { color: inherit; text-decoration: none; }
-.row { cursor: pointer; }
-.row:active { filter: brightness(1.08); }
+/* Review button — tinted action on needs-you rows. */
+.row-actions {
+  margin-top: 8px;
+  display: flex; gap: 8px;
+}
+.row-actions:empty { display: none; }
+.row-review {
+  background: transparent;
+  color: var(--you);
+  border: 1px solid var(--you-line);
+  border-radius: var(--r-btn);
+  padding: 8px 14px;
+  min-height: 36px;
+  font: inherit; font-size: 13px; font-weight: 700;
+  cursor: pointer;
+}
+.row-review:active { filter: brightness(1.12); }
+.row-review:focus-visible { outline: 2px solid var(--you); outline-offset: 1px; }
+
+/* ------------------------------------------------------------------
+   Empty state card (no Claude sessions).
+   ------------------------------------------------------------------ */
+.empty-card {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  margin: 40px auto 24px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-2);
+  max-width: 420px;
+}
+.empty-mascot { font-size: 56px; color: var(--text-3); opacity: 0.75; line-height: 1; }
+.empty-title { margin: 4px 0 0; color: var(--text); font-size: 20px; font-weight: 700; letter-spacing: 0.2px; }
+.empty-body { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.5; max-width: 320px; }
+.empty-action { margin-top: 12px; padding: 12px 22px; font-size: 15px; gap: 8px; }
+.empty-plus { font-size: 18px; font-weight: 700; }
 
 /* ------------------------------------------------------------------
    Conversation page (/conversation.html)
@@ -611,8 +682,9 @@ body.state-idle   .strip-state  { color: var(--text-3); }
    ------------------------------------------------------------------ */
 .topbar .new-session {
   background: var(--accent); color: var(--on-accent); border: 0;
-  width: 44px; height: 44px; border-radius: 999px;
-  font-size: 20px; font-weight: 700; line-height: 1;
+  width: 44px; height: 44px; border-radius: var(--r-md);
+  font-size: 22px; font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
 }
 .topbar .new-session:active { filter: brightness(1.1); }
@@ -673,42 +745,65 @@ body.state-idle   .strip-state  { color: var(--text-3); }
 .new-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 /* ------------------------------------------------------------------
-   Other panes group (#10)
+   Other tmux panes group — view only.
+   Collapsed by default when at least one Claude session exists, expanded by
+   default on the empty state. The toggle is a full-width button whose caret
+   leads a mixed-case label ("Other tmux panes · view only"); the row shows
+   the command (sans tool tag), the directory (mono), and a bash·main:5 tag.
    ------------------------------------------------------------------ */
-.other-group { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.other-group { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 6px; }
 .other-toggle {
-  width: 100%; display: flex; align-items: center; gap: 8px;
+  width: 100%; display: flex; align-items: center; gap: 10px;
   background: transparent; color: var(--text); border: 0;
-  padding: 8px 2px; min-height: 44px; font: inherit; font-weight: 600;
+  padding: 10px 2px; min-height: 44px; font: inherit; font-weight: 600;
   cursor: pointer;
 }
-.other-toggle .caret { color: var(--text-2); transition: transform 0.15s ease; display: inline-block; }
+.other-toggle .caret {
+  color: var(--text-2);
+  transition: transform 0.15s ease;
+  display: inline-block;
+  font-size: 14px;
+}
 .other-toggle.open .caret { transform: rotate(90deg); }
 .other-toggle .label {
-  flex: 1; text-align: left; color: var(--text-2);
-  letter-spacing: 0.06em; text-transform: uppercase; font-size: 12px; font-weight: 600;
+  flex: 1; text-align: left; color: var(--text);
+  font-size: 15px; font-weight: 600;
 }
 .other-count {
   background: var(--raised); color: var(--text-2);
-  padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 700; min-width: 22px; text-align: center;
+  padding: 2px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+  min-width: 26px; text-align: center;
+  font-variant-numeric: tabular-nums;
 }
-.other-list { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-direction: column; gap: 4px; }
+.other-list { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-direction: column; gap: 0; }
 .other-row {
   display: grid; grid-template-columns: 1fr auto; column-gap: 10px;
-  padding: 10px; background: var(--surface);
-  border-radius: var(--r-sm); border-left: 3px solid var(--text-3);
+  padding: 10px 2px;
+  border-top: 1px solid var(--line-soft);
+  background: transparent;
 }
-.other-hint { color: var(--off); font-size: 12px; margin: 6px 2px 0; }
-.other-row .other-name { color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.other-row .other-meta {
-  color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; justify-self: end;
+.other-row:first-child { border-top: 0; }
+.other-row .other-title {
+  color: var(--text); font-weight: 700; font-size: 15px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.other-row .other-tag {
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  justify-self: end;
   white-space: nowrap;
 }
 .other-row .other-path {
-  grid-column: 1 / -1; color: var(--off); font-size: 11px;
+  grid-column: 1 / -1;
+  color: var(--text-3);
   font-family: var(--mono);
+  font-size: 12px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 2px;
 }
 
 /* ------------------------------------------------------------------
