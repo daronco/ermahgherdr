@@ -32,18 +32,26 @@
   --done-bg: rgba(99, 192, 122, 0.10);
   --work-bg: rgba(232, 163, 61, 0.12);
   --accent-bg: rgba(45, 204, 211, 0.10);
+  --accent-line: rgba(45, 204, 211, 0.32);
 
   /* Foregrounds on strong fills */
   --on-accent: #0b1e1f;
   --on-you: #1b0f2e;
+  /* --done/--work/--idle badges keep dark-teal foreground by design — named
+     separately so a future --accent hue shift doesn't drag them along. */
+  --on-done: #0b1e1f;
+  --on-work: #0b1e1f;
+  --on-idle: #0b1e1f;
 
   /* Warn (send-warn) and error — not in the design tokens, but the current
      warm-amber warn and error-red states need named tokens so no hex leaks
-     outside :root. */
+     outside :root. --err-line is the border for destructive actions, kept
+     distinct from --warn-line so the two semantics can diverge later. */
   --warn: #e8c58a;
   --warn-bg: #2a1f1f;
   --warn-line: #4a2323;
   --err: #e05b57;
+  --err-line: #4a2323;
 
   /* Pinned dai-live row — out of the design, kept as-is. */
   --dai: #4fd08a;
@@ -54,6 +62,7 @@
 
   /* Radii */
   --r-sm: 6px;
+  --r-btn: 8px;
   --r-md: 10px;
   --r-lg: 14px;
   --r-xl: 20px;
@@ -111,7 +120,7 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .row.state-done   { background: var(--done-bg); border-left-color: var(--done); }
 .row.state-proc   { background: var(--surface); border-left-color: var(--work); }
 .row.state-urgent { background: var(--you-bg); border-left-color: var(--you); }
-.row.dai          { outline: 1px solid var(--accent-bg); }
+.row.dai          { outline: 1px solid var(--accent-line); }
 .row.paused       { opacity: 0.55; }
 .row.paused .name { color: var(--text-3); }
 .row.prio .name   { font-weight: 600; color: var(--text); }
@@ -138,12 +147,12 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .row .badge {
   min-width: 28px; text-align: center;
   padding: 2px 6px; border-radius: 4px;
-  background: var(--idle); color: var(--on-accent);
+  background: var(--idle); color: var(--on-idle);
   font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
 .row.state-urgent .badge { background: var(--you); color: var(--on-you); }
-.row.state-done   .badge { background: var(--done); color: var(--on-accent); }
-.row.state-proc   .badge { background: var(--work); color: var(--on-accent); }
+.row.state-done   .badge { background: var(--done); color: var(--on-done); }
+.row.state-proc   .badge { background: var(--work); color: var(--on-work); }
 
 /* Context meter: a thin bar under the row body. Mirrors the bar's thresholds
    (70% amber, 85% ctx-purple). Only shown when the server reports a value. */
@@ -191,7 +200,7 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   color: var(--text);
 }
 .perm-head {
-  font-weight: 650; color: var(--you);
+  font-weight: 600; color: var(--you);
   font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
 }
 .perm-body { margin-top: 4px; color: var(--text); white-space: pre-wrap; }
@@ -322,7 +331,7 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   color: var(--text-3); font-size: 12px;
   margin-bottom: 4px;
 }
-.turn-role { font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; font-size: 12px; }
+.turn-role { font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 12px; }
 .turn-user .turn-role      { color: var(--accent); }
 .turn-assistant .turn-role { color: var(--done); }
 .turn-tool_result .turn-role { color: var(--work); }
@@ -421,7 +430,7 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   cursor: pointer;
 }
 .qk:active { filter: brightness(1.15); }
-.qk.danger { color: var(--err); border-color: var(--warn-line); }
+.qk.danger { color: var(--err); border-color: var(--err-line); }
 
 .replybox { display: flex; align-items: flex-end; gap: 6px; }
 .replybox textarea {
@@ -456,7 +465,7 @@ body.state-urgent .topbar { background: var(--you-bg); }
   color: var(--text-2); font-size: 12px;
 }
 .strip-state {
-  font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
+  font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--text-2);
 }
 .strip-tool {
@@ -556,7 +565,7 @@ body.state-idle   .strip-state  { color: var(--text-3); }
 }
 .term-mode-toggle {
   background: var(--raised); color: var(--text); border: 1px solid var(--line);
-  padding: 6px 12px; border-radius: 8px; font: inherit; font-weight: 600; font-size: 13px;
+  padding: 6px 12px; border-radius: var(--r-btn); font: inherit; font-weight: 600; font-size: 13px;
   min-height: 36px; cursor: pointer;
 }
 .term-mode-toggle:active { filter: brightness(1.15); }
@@ -576,7 +585,7 @@ body.state-idle   .strip-state  { color: var(--text-3); }
 }
 .tk:active { filter: brightness(1.15); }
 .tk:disabled { opacity: 0.5; cursor: default; }
-.tk.tk-danger { color: var(--err); border-color: var(--warn-line); }
+.tk.tk-danger { color: var(--err); border-color: var(--err-line); }
 .tk.tk-error { border-color: var(--err); color: var(--err); }
 
 /* ------------------------------------------------------------------
@@ -607,7 +616,7 @@ body.state-idle   .strip-state  { color: var(--text-3); }
   max-height: 85vh; overflow: auto;
 }
 .sheet-head { display: flex; justify-content: space-between; align-items: baseline; }
-.sheet-head h2 { margin: 0; font-size: 17px; font-weight: 650; color: var(--text); }
+.sheet-head h2 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text); }
 .sheet-close {
   background: transparent; border: 0; color: var(--text-2);
   font-size: 22px; line-height: 1; cursor: pointer; padding: 0 6px;
@@ -629,7 +638,7 @@ body.state-idle   .strip-state  { color: var(--text-3); }
 
 .new-form { display: flex; flex-direction: column; gap: 8px; }
 .new-label {
-  color: var(--text-2); font-size: 12px; font-weight: 650;
+  color: var(--text-2); font-size: 12px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em;
 }
 .new-input {
@@ -659,7 +668,7 @@ body.state-idle   .strip-state  { color: var(--text-3); }
 .other-toggle.open .caret { transform: rotate(90deg); }
 .other-toggle .label {
   flex: 1; text-align: left; color: var(--text-2);
-  letter-spacing: 0.06em; text-transform: uppercase; font-size: 12px; font-weight: 650;
+  letter-spacing: 0.06em; text-transform: uppercase; font-size: 12px; font-weight: 600;
 }
 .other-count {
   background: var(--raised); color: var(--text-2);
@@ -718,7 +727,7 @@ body.state-idle   .strip-state  { color: var(--text-3); }
 
 .btn.sm {
   min-height: 36px; padding: 6px 12px;
-  border-radius: 8px; font-size: 13px;
+  border-radius: var(--r-btn); font-size: 13px;
 }
 
 /* Round icon button — 44 px circle. .send fills with accent on --on-accent. */
@@ -737,7 +746,9 @@ body.state-idle   .strip-state  { color: var(--text-3); }
   border-color: var(--accent);
 }
 
-/* Status pill — the "status glyph" row of telas/12.html. */
+/* Status pill — the "status glyph" row of telas/12.html.
+   Asymmetry by design: .you is a solid fill (--you + --on-you) because urgent
+   must dominate; .done/.work/.idle are tinted (--*-bg + --*) so they recede. */
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 0 12px; min-height: 44px;
