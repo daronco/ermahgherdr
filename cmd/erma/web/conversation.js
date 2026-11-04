@@ -97,16 +97,14 @@
   // Wall-clock of the last state/delta tick, surfaced in the banner & strip as HH:MM.
   let lastUpdateHHMM = fmtTime(Date.now());
   let heartbeatTimer = 0;
-  let countdownTimer = 0;
-  let retrySecsLeft = 5;
   const HEARTBEAT_GAP_MS = 15000;
-  const RETRY_COUNTDOWN_SECS = 5;
-  // Pending failed turns awaiting an explicit Retry — key is _localId, value the text.
-  const failedTexts = new Map();
 
+  // Pill rendering keyed purely off the state arg. applyOnline owns the
+  // online/offline transition and calls setConn('live' | 'lost'); connect()
+  // calls setConn('wait') during the initial handshake.
   function setConn(state) {
     connEl.className = 'status ' + state;
-    if (state === 'lost' || !online) {
+    if (state === 'lost') {
       connEl.textContent = 'Offline';
       connEl.classList.add('pill-offline');
     } else {
@@ -485,24 +483,18 @@
   }
 
   // applyOnline — single entry point for every offline/online transition.
-  // Toggles the banner, strip, and header pill in lock-step and starts /
-  // stops the retry countdown. The transport-layer sensors (SSE error,
-  // failed POST, heartbeat gap) all come through here.
+  // Toggles the banner, strip, and header pill in lock-step. The transport-
+  // layer sensors (SSE error, failed POST, heartbeat gap) all come through
+  // here. Reconnect itself is handled by the browser's native EventSource
+  // backoff, so nothing in this layer drives a retry timer.
   function applyOnline(flag) {
-    const was = online;
     online = !!flag;
     document.body.classList.toggle('offline', !online);
     if (!online) {
-      if (was) {
-        // First edge offline → freeze the HH:MM, start the countdown.
-        lastUpdateHHMM = fmtTime(Date.now());
-        startCountdown();
-      }
       showOfflineBanner();
       updateStrip();
       setConn('lost');
     } else {
-      stopCountdown();
       hideOfflineBanner();
       updateStrip();
       setConn('live');
@@ -515,38 +507,15 @@
     if (offlineMsgEl) {
       offlineMsgEl.textContent = "Can't reach the laptop. Showing state from " + lastUpdateHHMM + '.';
     }
-    renderCountdown();
+    if (offlineRetryEl) {
+      offlineRetryEl.textContent = 'waiting to reconnect…';
+    }
     offlineEl.hidden = false;
   }
 
   function hideOfflineBanner() {
     if (!offlineEl) return;
     offlineEl.hidden = true;
-  }
-
-  function renderCountdown() {
-    if (!offlineRetryEl) return;
-    offlineRetryEl.textContent = 'retry ' + retrySecsLeft + 's';
-  }
-
-  function startCountdown() {
-    retrySecsLeft = RETRY_COUNTDOWN_SECS;
-    renderCountdown();
-    stopCountdown();
-    countdownTimer = setInterval(() => {
-      retrySecsLeft -= 1;
-      if (retrySecsLeft <= 0) {
-        retrySecsLeft = RETRY_COUNTDOWN_SECS;
-      }
-      renderCountdown();
-    }, 1000);
-  }
-
-  function stopCountdown() {
-    if (countdownTimer) {
-      clearInterval(countdownTimer);
-      countdownTimer = 0;
-    }
   }
 
   // Heartbeat watchdog: any SSE event resets it; if nothing arrives for
@@ -778,9 +747,8 @@
     if (li) {
       li.classList.remove('turn-pending');
       li.classList.add('turn-failed');
-      renderFailedAffordance(li, localId, text);
+      renderFailedAffordance(li, text);
     }
-    failedTexts.set(localId, text);
     // The echo is no longer waiting on a server match — a late user turn on
     // the stream (manual retry, server echo) should not reconcile against it.
     for (let i = 0; i < pendingEchoes.length; i++) {
@@ -794,7 +762,7 @@
   // Build the "Not sent · laptop unreachable" affordance with Edit / Retry
   // buttons. Edit rehydrates the composer and removes the row; Retry re-POSTs
   // the same payload exactly once per tap.
-  function renderFailedAffordance(li, localId, text) {
+  function renderFailedAffordance(li, text) {
     // Guard against double-render if markPendingFailed runs twice for the row.
     if (li.querySelector('.failed-actions')) return;
     const notice = document.createElement('div');
@@ -813,7 +781,6 @@
       replyEl.value = text;
       autosizeReply();
       replyEl.focus();
-      failedTexts.delete(localId);
       li.remove();
     });
 
@@ -824,7 +791,6 @@
     retryBtn.addEventListener('click', () => {
       // One tap = one POST. Drop the current row so the retry starts clean;
       // callText renders a new pending echo and, on failure, a new failed row.
-      failedTexts.delete(localId);
       li.remove();
       callText(text);
     });
