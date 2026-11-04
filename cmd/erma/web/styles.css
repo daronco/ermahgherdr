@@ -353,6 +353,23 @@ main { padding: 8px 10px 24px; max-width: 760px; margin: 0 auto; }
 }
 .turn-body th { background: rgba(255,255,255,0.04); font-weight: 600; }
 
+/* A pasted-content block in a user turn: a small label sits on its own line
+   above the inner text, which inherits the turn-body font. Both the wrapper
+   and the inner body are <div>s so the label naturally breaks out of the
+   surrounding inline flow. */
+.pasted-block { margin: 4px 0; }
+.pasted-label {
+  display: inline-block;
+  margin-bottom: 2px;
+  padding: 0 6px;
+  background: rgba(255,255,255,0.06);
+  color: var(--meta);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  border-radius: 3px;
+}
+
 .turn-tool { display: flex; align-items: baseline; gap: 8px; }
 .tool-name { color: var(--ctx); font-weight: 700; }
 .tool-args {

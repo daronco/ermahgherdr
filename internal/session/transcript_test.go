@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 // writeTranscript builds a Claude-shaped projects root at tmp/.claude/projects/
@@ -592,6 +593,216 @@ func TestWatchTranscriptResumesFromCursor(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no delta within 2s")
+	}
+}
+
+// A user row flagged as the auto-compaction summary — either via the envelope
+// marker or via the leading sentence fallback — comes out as a system chip so
+// the PWA renders it as the collapsed grey row rather than a huge "YOU" turn.
+func TestParseTurnReclassifiesCompactionSummary(t *testing.T) {
+	fullBody := "This session is being continued from a previous conversation. Prior context: synthetic test body."
+	cases := []struct {
+		name string
+		row  map[string]any
+	}{
+		{
+			"marker",
+			map[string]any{
+				"type":             "user",
+				"timestamp":        "2026-10-12T20:00:00.000Z",
+				"isCompactSummary": true,
+				"message":          map[string]any{"role": "user", "content": "whatever body"},
+			},
+		},
+		{
+			"leading-sentence-fallback",
+			map[string]any{
+				"type":      "user",
+				"timestamp": "2026-10-12T20:00:00.000Z",
+				"message":   map[string]any{"role": "user", "content": fullBody},
+			},
+		},
+		{
+			"marker-with-blocks-content",
+			map[string]any{
+				"type":             "user",
+				"timestamp":        "2026-10-12T20:00:00.000Z",
+				"isCompactSummary": true,
+				"message": map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{"type": "text", "text": "arbitrary compacted body"},
+					},
+				},
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			line, _ := json.Marshal(c.row)
+			turn, ok := parseTurn(line)
+			if !ok {
+				t.Fatalf("parseTurn returned ok=false")
+			}
+			if turn.Role != "system" {
+				t.Errorf("role: got %q want system", turn.Role)
+			}
+			if turn.Summary != "📦 conversation compacted" {
+				t.Errorf("summary: got %q", turn.Summary)
+			}
+			msg, _ := c.row["message"].(map[string]any)
+			var wantText string
+			switch v := msg["content"].(type) {
+			case string:
+				wantText = v
+			case []any:
+				wantText = v[0].(map[string]any)["text"].(string)
+			}
+			if turn.Text != wantText {
+				t.Errorf("text: got %q want %q (full body preserved)", turn.Text, wantText)
+			}
+			if turn.Pasted != nil {
+				t.Errorf("Pasted should be empty on a compaction row, got %+v", turn.Pasted)
+			}
+		})
+	}
+}
+
+// User rows carry pasted blocks inline as <pasted_content id="…">…</pasted_content>.
+// The parser strips the wrappers and reports the UTF-16 code-unit range of
+// each inner block — the unit JS String.prototype.slice indexes in, so the
+// client can forward spans straight to text.slice without a re-encoding step.
+func TestParseTurnUnwrapsPastedBlocks(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  string
+		wantText string
+		wantPast []PastedSpan
+	}{
+		{
+			"single-block",
+			`before <pasted_content id="1">INNER</pasted_content> after`,
+			`before INNER after`,
+			[]PastedSpan{{Start: 7, End: 12}},
+		},
+		{
+			"two-blocks-interleaved",
+			`A <pasted_content id="1">ONE</pasted_content> B <pasted_content id="2">TWO</pasted_content> C`,
+			`A ONE B TWO C`,
+			[]PastedSpan{{Start: 2, End: 5}, {Start: 8, End: 11}},
+		},
+		{
+			"multiline-block-preserves-newlines",
+			"head\n<pasted_content id=\"x\">line1\nline2</pasted_content>\ntail",
+			"head\nline1\nline2\ntail",
+			[]PastedSpan{{Start: 5, End: 16}},
+		},
+		{
+			// Accented letters outside the pasted block push the UTF-16 start
+			// past the equivalent byte offset — "café " is 5 bytes but 5 code
+			// units (é is U+00E9, one unit), so for latin-1-ish prose offsets
+			// still line up. The surrogate-pair case below is the one that
+			// used to misfire.
+			"non-ascii-around-and-inside-block",
+			`café <pasted_content id="1">naïve</pasted_content> ☕`,
+			`café naïve ☕`,
+			[]PastedSpan{{Start: 5, End: 10}},
+		},
+		{
+			// 🙂 is U+1F642, a supplementary-plane code point: 4 bytes in
+			// UTF-8, 2 UTF-16 code units. Spans are in code units, so the
+			// outer emoji counts as 2 and the inner emoji contributes 2 to
+			// the span width — a byte-offset client would land in the middle
+			// of a surrogate pair here.
+			"supplementary-plane-emoji-in-and-out-of-block",
+			`🙂 <pasted_content id="1">a🙂b</pasted_content> end`,
+			`🙂 a🙂b end`,
+			[]PastedSpan{{Start: 3, End: 7}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			line, _ := json.Marshal(map[string]any{
+				"type":      "user",
+				"timestamp": "2026-10-12T20:00:00.000Z",
+				"message":   map[string]any{"role": "user", "content": c.content},
+			})
+			turn, ok := parseTurn(line)
+			if !ok {
+				t.Fatal("parseTurn returned ok=false")
+			}
+			if turn.Role != "user" {
+				t.Errorf("role: got %q want user", turn.Role)
+			}
+			if turn.Text != c.wantText {
+				t.Errorf("text:\n got %q\nwant %q", turn.Text, c.wantText)
+			}
+			if len(turn.Pasted) != len(c.wantPast) {
+				t.Fatalf("pasted spans: got %d want %d (%+v)", len(turn.Pasted), len(c.wantPast), turn.Pasted)
+			}
+			// Spans index UTF-16 code units — the same unit JS slice uses.
+			// Simulate the JS consumer: encode both strings to UTF-16, slice
+			// at the span offsets, decode back, and compare.
+			gotU16 := utf16.Encode([]rune(turn.Text))
+			wantU16 := utf16.Encode([]rune(c.wantText))
+			for i, want := range c.wantPast {
+				if turn.Pasted[i] != want {
+					t.Errorf("span %d: got %+v want %+v", i, turn.Pasted[i], want)
+				}
+				got := string(utf16.Decode(gotU16[turn.Pasted[i].Start:turn.Pasted[i].End]))
+				wantInner := string(utf16.Decode(wantU16[want.Start:want.End]))
+				if got != wantInner {
+					t.Errorf("span %d body: got %q want %q", i, got, wantInner)
+				}
+			}
+		})
+	}
+}
+
+// A row that mentions "<pasted_content" without a proper id= opening tag and
+// a matching closing tag must survive untouched — the tag might just be the
+// topic of the message.
+func TestParseTurnLeavesBarePastedMentionAlone(t *testing.T) {
+	cases := []string{
+		"please update the <pasted_content rendering",
+		`see the "<pasted_content id="1">" wrapper (no closing tag here)`,
+		`<pasted_content>no id attribute</pasted_content>`,
+	}
+	for _, in := range cases {
+		line, _ := json.Marshal(map[string]any{
+			"type":      "user",
+			"timestamp": "2026-10-12T20:00:00.000Z",
+			"message":   map[string]any{"role": "user", "content": in},
+		})
+		turn, ok := parseTurn(line)
+		if !ok {
+			t.Fatalf("parseTurn returned ok=false for %q", in)
+		}
+		if turn.Role != "user" {
+			t.Errorf("role: got %q want user for %q", turn.Role, in)
+		}
+		if turn.Text != in {
+			t.Errorf("text altered for %q:\n got %q", in, turn.Text)
+		}
+		if len(turn.Pasted) != 0 {
+			t.Errorf("Pasted should be empty for %q, got %+v", in, turn.Pasted)
+		}
+	}
+}
+
+// A plain user row carries no pasted spans and no compaction marker.
+func TestParseTurnPlainUserUnchanged(t *testing.T) {
+	line, _ := json.Marshal(map[string]any{
+		"type":      "user",
+		"timestamp": "2026-10-12T20:00:00.000Z",
+		"message":   map[string]any{"role": "user", "content": "hi there"},
+	})
+	turn, ok := parseTurn(line)
+	if !ok {
+		t.Fatal("parseTurn returned ok=false")
+	}
+	if turn.Role != "user" || turn.Text != "hi there" || len(turn.Pasted) != 0 || turn.Summary != "" {
+		t.Errorf("unexpected turn: %+v", turn)
 	}
 }
 

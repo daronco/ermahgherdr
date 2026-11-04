@@ -125,17 +125,28 @@ func scanCwdByLine(r io.Reader) [][]byte {
 // the UI collapses a message that is "assistant thinking + N tool_use blocks"
 // to one row by default.
 type Turn struct {
-	Role    string    `json:"role"`              // "user" | "assistant" | "tool_result" | "system"
-	Ts      time.Time `json:"ts"`                // the transcript's own timestamp
-	Text    string    `json:"text"`              // user-visible text; a short summary for tool_result; the full raw body for system
-	Summary string    `json:"summary,omitempty"` // one-line label for a collapsed system turn
-	Tool    *ToolCall `json:"tool,omitempty"`    // non-nil for an assistant turn whose body is a tool call
+	Role    string       `json:"role"`              // "user" | "assistant" | "tool_result" | "system"
+	Ts      time.Time    `json:"ts"`                // the transcript's own timestamp
+	Text    string       `json:"text"`              // user-visible text; a short summary for tool_result; the full raw body for system
+	Summary string       `json:"summary,omitempty"` // one-line label for a collapsed system turn
+	Tool    *ToolCall    `json:"tool,omitempty"`    // non-nil for an assistant turn whose body is a tool call
+	Pasted  []PastedSpan `json:"pasted,omitempty"`  // byte ranges in Text that were unwrapped from <pasted_content> blocks
 }
 
 // ToolCall: the folded summary of an assistant tool_use block.
 type ToolCall struct {
 	Name string `json:"name"` // "Bash", "Edit", ...
 	Args string `json:"args"` // one-line summary of the tool input
+}
+
+// PastedSpan marks a slice of a user turn's Text that was originally wrapped
+// in <pasted_content id="…">…</pasted_content>. Start is inclusive, End is
+// exclusive, both measured in UTF-16 code units so a JS consumer can feed
+// them straight to String.prototype.slice. The Text field itself stays
+// UTF-8 — only the span offsets are UTF-16 indices.
+type PastedSpan struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 // Cursor: a byte offset into the JSONL file. The client treats it as opaque.
@@ -340,10 +351,16 @@ func transcriptSize(sid string) (int64, error) {
 
 // jsonlEntry: the subset of a JSONL row ReadConversation needs. Everything
 // else is passed through to the raw message decoder.
+//
+// IsCompactSummary marks the "user" row Claude Code writes when the previous
+// context was auto-compacted. The marker lives on the envelope; a transcript
+// that pre-dates it still gets caught by the leading-sentence fallback in
+// parseTurn.
 type jsonlEntry struct {
-	Type      string          `json:"type"`
-	Timestamp string          `json:"timestamp"`
-	Message   json.RawMessage `json:"message"`
+	Type             string          `json:"type"`
+	Timestamp        string          `json:"timestamp"`
+	Message          json.RawMessage `json:"message"`
+	IsCompactSummary bool            `json:"isCompactSummary"`
 }
 
 // msgEnvelope: the "message" sub-document. User and assistant both use it;
@@ -396,9 +413,14 @@ func parseTurn(line []byte) (Turn, bool) {
 			return Turn{}, false
 		}
 		if m.Role == "user" {
+			if isCompactionSummary(e.IsCompactSummary, s) {
+				return Turn{Role: "system", Ts: ts, Text: s, Summary: compactionSummaryLabel}, true
+			}
 			if role, summary, ok := classifyHarnessText(s); ok {
 				return Turn{Role: role, Ts: ts, Text: s, Summary: summary}, true
 			}
+			text, pasted := unwrapPastedBlocks(s)
+			return Turn{Role: "user", Ts: ts, Text: text, Pasted: pasted}, true
 		}
 		return Turn{Role: m.Role, Ts: ts, Text: s}, true
 	}
@@ -446,10 +468,14 @@ func parseTurn(line []byte) (Turn, bool) {
 	case "user":
 		if text.Len() > 0 {
 			s := text.String()
+			if isCompactionSummary(e.IsCompactSummary, s) {
+				return Turn{Role: "system", Ts: ts, Text: s, Summary: compactionSummaryLabel}, true
+			}
 			if role, summary, ok := classifyHarnessText(s); ok {
 				return Turn{Role: role, Ts: ts, Text: s, Summary: summary}, true
 			}
-			return Turn{Role: "user", Ts: ts, Text: s}, true
+			cleaned, pasted := unwrapPastedBlocks(s)
+			return Turn{Role: "user", Ts: ts, Text: cleaned, Pasted: pasted}, true
 		}
 		// Nothing but tool_result blocks. Render only when it errored OR carried
 		// a short result — the common success case is already implied by the
@@ -465,6 +491,84 @@ func parseTurn(line []byte) (Turn, bool) {
 		return Turn{}, false
 	}
 	return Turn{}, false
+}
+
+// compactionSummaryLabel: the one-line chip the PWA shows for a user row that
+// is in fact the auto-compaction summary Claude Code wrote in place of the
+// previous conversation.
+const compactionSummaryLabel = "📦 conversation compacted"
+
+// compactionLeadingSentence: the opening of the compaction summary Claude
+// Code emits — used as a fallback for transcripts written before the
+// isCompactSummary envelope marker existed.
+const compactionLeadingSentence = "This session is being continued from a previous conversation"
+
+// isCompactionSummary decides whether a user row is the auto-compaction
+// summary. The envelope marker wins; the leading-sentence fallback catches
+// older transcripts.
+func isCompactionSummary(marker bool, body string) bool {
+	if marker {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), compactionLeadingSentence)
+}
+
+// pastedBlockRE matches a complete <pasted_content id="…">…</pasted_content>
+// wrapper. The id attribute is required so a bare mention of the tag — the
+// kind you'd see in a message that discusses the feature — is left alone.
+// The id value itself is not captured: it's just a disambiguator so two
+// pasted blocks in one message can be told apart; the content we care about
+// is the inner body (capture group 1). (?s) lets `.` cross newlines; the
+// inner match is non-greedy so two blocks in one message don't collapse.
+var pastedBlockRE = regexp.MustCompile(`(?s)<pasted_content id="[^"]*">(.*?)</pasted_content>`)
+
+// unwrapPastedBlocks strips every full <pasted_content id="…">…</pasted_content>
+// wrapper from s, keeps the inner text verbatim in place, and returns the
+// UTF-16 code-unit ranges each pasted block now occupies in the cleaned
+// string — JS String.prototype.slice indexes in UTF-16 code units, so we
+// pre-convert here to keep the client oblivious to the encoding mismatch.
+// Surrounding text is left exactly as it was. A string without any complete
+// wrapper comes back unchanged with a nil span list.
+func unwrapPastedBlocks(s string) (string, []PastedSpan) {
+	matches := pastedBlockRE.FindAllStringSubmatchIndex(s, -1)
+	if len(matches) == 0 {
+		return s, nil
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	spans := make([]PastedSpan, 0, len(matches))
+	prev := 0
+	u16 := 0
+	for _, m := range matches {
+		// m[0], m[1] — full match; m[2], m[3] — inner (capture group 1).
+		pre := s[prev:m[0]]
+		b.WriteString(pre)
+		u16 += utf16Len(pre)
+		start := u16
+		inner := s[m[2]:m[3]]
+		b.WriteString(inner)
+		u16 += utf16Len(inner)
+		spans = append(spans, PastedSpan{Start: start, End: u16})
+		prev = m[1]
+	}
+	b.WriteString(s[prev:])
+	return b.String(), spans
+}
+
+// utf16Len returns the length of s measured in UTF-16 code units — the unit
+// JS String.length / String.prototype.slice uses. BMP code points cost one
+// unit, supplementary-plane ones (U+10000 and above) cost two (surrogate
+// pair). Invalid UTF-8 bytes decode to U+FFFD, which costs one.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
 }
 
 // harnessTags: non-task-notification harness wrappers Claude Code injects as
