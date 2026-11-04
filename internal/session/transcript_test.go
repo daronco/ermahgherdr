@@ -961,6 +961,32 @@ func TestBuildToolCallPreservesRawPayload(t *testing.T) {
 	}
 }
 
+// A trailing newline in either side must not synthesize a phantom blank line
+// — real diff tools do not render one and the sheet would show a bare "− " /
+// "+ " row that looks like an artifact.
+func TestBuildToolCallEditTrimsTrailingNewline(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"file_path":  "/repo/a.txt",
+		"old_string": "one\ntwo\n",
+		"new_string": "ONE\nTWO\n",
+	})
+	tc := buildToolCall("Edit", raw)
+	want := []DiffLine{
+		{Kind: "del", Text: "one"},
+		{Kind: "del", Text: "two"},
+		{Kind: "add", Text: "ONE"},
+		{Kind: "add", Text: "TWO"},
+	}
+	if len(tc.DiffFull) != len(want) {
+		t.Fatalf("DiffFull: got %+v, want %+v", tc.DiffFull, want)
+	}
+	for i, w := range want {
+		if tc.DiffFull[i] != w {
+			t.Errorf("DiffFull[%d]: got %+v, want %+v", i, tc.DiffFull[i], w)
+		}
+	}
+}
+
 // Unknown tools get only Name and Args — no file/diff/command fields are
 // inferred. Keeps the ToolCall shape tight and deterministic.
 func TestBuildToolCallUnknownToolLeavesPreviewEmpty(t *testing.T) {

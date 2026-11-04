@@ -743,17 +743,17 @@ func populateBash(tc *ToolCall, raw json.RawMessage) {
 
 // synthesizeEditDiff builds the DiffLine slice an Edit / Write / MultiEdit
 // replacement represents: each line of old is a "del", each line of new is an
-// "add". A trailing newline in either side produces an extra empty line, so
-// the caller sees the exact shape Claude will write.
+// "add". Trailing newlines are stripped before splitting so the diff does not
+// carry a phantom blank line at the end of each side.
 func synthesizeEditDiff(oldSide, newSide string) []DiffLine {
 	var out []DiffLine
-	if oldSide != "" {
-		for _, line := range strings.Split(oldSide, "\n") {
+	if s := strings.TrimRight(oldSide, "\n"); s != "" {
+		for _, line := range strings.Split(s, "\n") {
 			out = append(out, DiffLine{Kind: "del", Text: line})
 		}
 	}
-	if newSide != "" {
-		for _, line := range strings.Split(newSide, "\n") {
+	if s := strings.TrimRight(newSide, "\n"); s != "" {
+		for _, line := range strings.Split(s, "\n") {
 			out = append(out, DiffLine{Kind: "add", Text: line})
 		}
 	}

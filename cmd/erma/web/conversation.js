@@ -394,8 +394,8 @@
   // latestPendingToolCall: walk the turn store from the tail for the newest
   // assistant turn carrying a tool block that has no later tool_result turn.
   // That's the tool currently running — the CLI spinner shows the same thing.
-  // Returns the whole tool object (name + preview fields) so the perm sheet
-  // can read file_path / command / diff_preview without re-parsing anything.
+  // Returns the tool object (name + preview fields) so the perm sheet can
+  // read file_path / command / diff_preview without re-parsing anything.
   // Assumes sequential tool execution: any later tool_result is treated as the
   // match. Parallel tool calls would need result-id correlation.
   function latestPendingToolCall() {
@@ -406,14 +406,14 @@
       for (let j = i + 1; j < allTurns.length; j++) {
         if (allTurns[j].role === 'tool_result') { hasResult = true; break; }
       }
-      if (!hasResult) return { turnIndex: i, tool: t.tool };
+      if (!hasResult) return t.tool;
     }
     return null;
   }
 
   function latestPendingTool() {
-    const p = latestPendingToolCall();
-    return p ? (p.tool.name || '') : '';
+    const t = latestPendingToolCall();
+    return t ? (t.name || '') : '';
   }
 
   function fmtElapsed(ms) {
@@ -475,7 +475,7 @@
         detail = latestPendingTool();
       } else if (lastKnownState === 'urgent') {
         const pending = latestPendingToolCall();
-        const toolName = pending ? pending.tool.name : '';
+        const toolName = pending ? pending.name : '';
         detail = reasonForPendingTool(toolName);
       }
       stripToolEl.textContent = detail;
@@ -594,9 +594,8 @@
 
   function renderPermPreview() {
     permPreviewEl.replaceChildren();
-    const pending = latestPendingToolCall();
-    if (!pending) return; // AskUserQuestion: no tool_use → no preview block
-    const tool = pending.tool;
+    const tool = latestPendingToolCall();
+    if (!tool) return; // AskUserQuestion: no tool_use → no preview block
     // Bash: single mono block with the command. No diff controls.
     if (tool.name === 'Bash') {
       if (!tool.command) return;
@@ -611,7 +610,9 @@
     }
     // Edit / Write / MultiEdit: file path header + diff preview + optional
     // Full-diff expander.
-    if (!tool.file_path && !(tool.diff_preview && tool.diff_preview.length)) return;
+    const full = tool.diff_full || [];
+    const preview = tool.diff_preview || [];
+    if (!tool.file_path && !preview.length) return;
     const box = document.createElement('div');
     box.className = 'sheet-diff';
     if (tool.file_path) {
@@ -621,8 +622,6 @@
       path.className = 'sheet-diff-path';
       path.textContent = tool.file_path;
       head.appendChild(path);
-      const full = tool.diff_full || [];
-      const preview = tool.diff_preview || [];
       if (full.length > preview.length) {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -638,10 +637,8 @@
     }
     const body = document.createElement('div');
     body.className = 'sheet-diff-body';
-    const lines = diffExpanded ? (tool.diff_full || []) : (tool.diff_preview || []);
+    const lines = diffExpanded ? full : preview;
     for (const line of lines) appendDiffLine(body, line);
-    const full = tool.diff_full || [];
-    const preview = tool.diff_preview || [];
     if (!diffExpanded && full.length > preview.length) {
       const ellipsis = document.createElement('div');
       ellipsis.className = 'sheet-diff-line sheet-diff-ellipsis';
@@ -663,8 +660,10 @@
   function renderPermChoices() {
     permChoicesEl.replaceChildren();
     let first = true;
+    let hasEsc = false;
     for (const c of latestChoices) {
       if (!c || !c.key) continue;
+      if (c.key === 'esc') hasEsc = true;
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'choice' + (first ? ' primary' : '');
@@ -680,6 +679,25 @@
       b.addEventListener('click', () => callKey(c.key));
       permChoicesEl.appendChild(b);
       first = false;
+    }
+    // Server-parsed choices never include the "Esc to cancel" footer as its
+    // own key (see extractPromptChoices), so always append a dismiss affordance
+    // unless the server did send one explicitly.
+    if (!hasEsc) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'choice';
+      b.setAttribute('data-key', 'esc');
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = 'esc';
+      b.appendChild(k);
+      const lbl = document.createElement('span');
+      lbl.className = 'choice-label';
+      lbl.textContent = 'Cancel';
+      b.appendChild(lbl);
+      b.addEventListener('click', () => callKey('esc'));
+      permChoicesEl.appendChild(b);
     }
   }
 
