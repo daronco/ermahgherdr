@@ -203,13 +203,12 @@
     n.age.textContent = fmtAge(s.since);
     renderSub(n, subLine(s));
 
-    // Meta line: pane + optional neutral context bar + optional ctx NN%. Only
-    // done and working rows carry it; needs-you, idle and paused fold the
-    // pane/ctx info into their sub-line.
+    // Meta line: pane + optional neutral context bar + optional ctx NN%. Idle
+    // and paused fold pane/ctx into the sub-line instead.
     const pane = paneLabel(s.pane);
     const ctx = parseInt(s.ctx, 10);
     const hasCtx = !isNaN(ctx) && ctx >= 0;
-    const showMeta = !s.dai && !!pane && (s.state === 'done' || s.state === 'proc') && s.marks !== 'paused';
+    const showMeta = !s.dai && !!pane && (s.state === 'done' || s.state === 'proc' || s.state === 'urgent') && s.marks !== 'paused';
     n.metaPane.parentElement.hidden = !showMeta;
     if (showMeta) {
       n.metaPane.textContent = pane;
