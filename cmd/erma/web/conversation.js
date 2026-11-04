@@ -97,7 +97,10 @@
   // Wall-clock of the last state/delta tick, surfaced in the banner & strip as HH:MM.
   let lastUpdateHHMM = fmtTime(Date.now());
   let heartbeatTimer = 0;
+  let countdownTimer = 0;
+  let retrySecsLeft = 5;
   const HEARTBEAT_GAP_MS = 15000;
+  const RETRY_COUNTDOWN_SECS = 5;
 
   // Pill rendering keyed purely off the state arg. applyOnline owns the
   // online/offline transition and calls setConn('live' | 'lost'); connect()
@@ -483,18 +486,27 @@
   }
 
   // applyOnline — single entry point for every offline/online transition.
-  // Toggles the banner, strip, and header pill in lock-step. The transport-
-  // layer sensors (SSE error, failed POST, heartbeat gap) all come through
-  // here. Reconnect itself is handled by the browser's native EventSource
-  // backoff, so nothing in this layer drives a retry timer.
+  // Toggles the banner, strip, and header pill in lock-step and starts /
+  // stops the retry countdown. The transport-layer sensors (SSE error,
+  // failed POST, heartbeat gap) all come through here. The browser's
+  // EventSource reconnect runs on its own cadence; the countdown is a user-
+  // facing tick, not the trigger — it resets back to RETRY_COUNTDOWN_SECS
+  // whenever it hits 0 so the "something is being tried" signal keeps moving.
   function applyOnline(flag) {
+    const was = online;
     online = !!flag;
     document.body.classList.toggle('offline', !online);
     if (!online) {
+      if (was) {
+        // First edge offline → freeze the HH:MM shown in the banner.
+        lastUpdateHHMM = fmtTime(Date.now());
+      }
       showOfflineBanner();
+      startCountdown();
       updateStrip();
       setConn('lost');
     } else {
+      stopCountdown();
       hideOfflineBanner();
       updateStrip();
       setConn('live');
@@ -507,15 +519,36 @@
     if (offlineMsgEl) {
       offlineMsgEl.textContent = "Can't reach the laptop. Showing state from " + lastUpdateHHMM + '.';
     }
-    if (offlineRetryEl) {
-      offlineRetryEl.textContent = 'waiting to reconnect…';
-    }
+    renderCountdown();
     offlineEl.hidden = false;
   }
 
   function hideOfflineBanner() {
     if (!offlineEl) return;
     offlineEl.hidden = true;
+  }
+
+  function renderCountdown() {
+    if (!offlineRetryEl) return;
+    offlineRetryEl.textContent = 'retry ' + retrySecsLeft + 's';
+  }
+
+  function startCountdown() {
+    retrySecsLeft = RETRY_COUNTDOWN_SECS;
+    renderCountdown();
+    if (countdownTimer) clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+      retrySecsLeft -= 1;
+      if (retrySecsLeft <= 0) retrySecsLeft = RETRY_COUNTDOWN_SECS;
+      renderCountdown();
+    }, 1000);
+  }
+
+  function stopCountdown() {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = 0;
+    }
   }
 
   // Heartbeat watchdog: any SSE event resets it; if nothing arrives for
