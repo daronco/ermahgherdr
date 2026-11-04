@@ -180,6 +180,8 @@
       body.className = 'turn-body';
       if (t.role === 'assistant' && window.ermaRenderMarkdown) {
         window.ermaRenderMarkdown(t.text, body);
+      } else if (t.role === 'user' && Array.isArray(t.pasted) && t.pasted.length > 0) {
+        appendUserBodyWithPasted(body, t.text, t.pasted);
       } else {
         body.textContent = t.text;
       }
@@ -202,6 +204,38 @@
       li.appendChild(row);
     }
     return li;
+  }
+
+  // Build a user turn body that interleaves raw text segments with pasted
+  // blocks. Each pasted span is wrapped in a labelled container; the server
+  // sends offsets measured in UTF-16 code units — the same unit String.slice
+  // and String.length use — so slicing `text` by them is correct for every
+  // Unicode input, including emoji that live in the supplementary planes.
+  // DOM APIs only — never innerHTML.
+  function appendUserBodyWithPasted(body, text, spans) {
+    let prev = 0;
+    for (const span of spans) {
+      if (!span || typeof span.start !== 'number' || typeof span.end !== 'number') continue;
+      if (span.start < prev || span.end < span.start || span.end > text.length) continue;
+      if (span.start > prev) {
+        body.appendChild(document.createTextNode(text.slice(prev, span.start)));
+      }
+      const block = document.createElement('div');
+      block.className = 'pasted-block';
+      const label = document.createElement('span');
+      label.className = 'pasted-label';
+      label.textContent = 'pasted';
+      block.appendChild(label);
+      const inner = document.createElement('div');
+      inner.className = 'pasted-body';
+      inner.textContent = text.slice(span.start, span.end);
+      block.appendChild(inner);
+      body.appendChild(block);
+      prev = span.end;
+    }
+    if (prev < text.length) {
+      body.appendChild(document.createTextNode(text.slice(prev)));
+    }
   }
 
   // The system turn is a compact grey chip: the one-line summary is visible,
