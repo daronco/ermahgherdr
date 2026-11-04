@@ -195,7 +195,8 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   position: sticky; top: var(--sticky-under-tabs, 86px); z-index: 2;
   max-height: 45vh; overflow-y: auto;
   margin: 8px 16px; padding: 12px;
-  background: var(--you-bg); border-left: 4px solid var(--you);
+  /* Sticky over the transcript: the tint needs an opaque base under it. */
+  background: linear-gradient(var(--you-bg), var(--you-bg)), var(--bg); border-left: 4px solid var(--you);
   border-radius: var(--r-sm);
   color: var(--text);
 }
@@ -413,9 +414,9 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   display: inline-block;
   margin-bottom: 2px;
   padding: 0 6px;
-  background: rgba(255,255,255,0.06);
-  color: var(--meta);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: var(--line);
+  color: var(--text-3);
+  font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.3px;
   border-radius: 3px;
@@ -466,7 +467,7 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .voice.listening { background: var(--you); color: var(--on-you); }
 
 /* Prominent whole-page urgent tint when the banner is up. */
-body.state-urgent .topbar { background: var(--you-bg); }
+body.state-urgent .topbar { background: linear-gradient(var(--you-bg), var(--you-bg)), var(--sunk); }
 
 /* Live status strip pinned above the composer. The bottom offset is kept in
    sync with the composer's measured height from conversation.js, so a growing
@@ -500,7 +501,7 @@ body.state-urgent .topbar { background: var(--you-bg); }
 
 body.state-proc   .status-strip { border-top-color: var(--work); }
 body.state-proc   .strip-state  { color: var(--work); }
-body.state-urgent .status-strip { border-top-color: var(--you); background: var(--you-bg); }
+body.state-urgent .status-strip { border-top-color: var(--you); background: linear-gradient(var(--you-bg), var(--you-bg)), var(--sunk); }
 body.state-urgent .strip-state  { color: var(--you); }
 body.state-done   .status-strip { border-top-color: var(--done); }
 body.state-done   .strip-state  { color: var(--done); }
