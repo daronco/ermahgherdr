@@ -320,11 +320,15 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   min-height: 0;
   padding-top: 4px;
 }
+/* Title sits at the sheet root (sibling of sheet-body), so it stays visible
+   when the sheet is collapsed — only the preview and the choices hide. */
 .perm-sheet .sheet-title {
-  margin: 0;
+  margin: 4px 0 8px;
   font-size: 16px; font-weight: 600; line-height: 1.35;
   color: var(--text);
+  flex: none;
 }
+.perm-sheet.collapsed .sheet-title { margin-bottom: 4px; }
 
 .perm-sheet .sheet-preview:empty { display: none; }
 
@@ -722,6 +726,15 @@ body.state-done   .status-strip { border-top-color: var(--done); }
 body.state-done   .strip-state  { color: var(--done); }
 body.state-idle   .status-strip { border-top-color: var(--line); }
 body.state-idle   .strip-state  { color: var(--text-3); }
+
+/* Urgent composes the strip as `Needs you · <reason> · <elapsed>` — drop the
+   right-anchor on elapsed and paint `·` separators between the three parts. */
+body.state-urgent .strip-elapsed { margin-left: 0; }
+body.state-urgent .strip-tool::before,
+body.state-urgent .strip-elapsed::before {
+  content: '· ';
+  color: var(--text-3);
+}
 
 /* Pending echo: the user's turn is on screen before the server has acked it. */
 .turn-pending {

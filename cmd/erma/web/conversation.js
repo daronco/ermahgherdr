@@ -480,6 +480,10 @@
       }
       stripToolEl.textContent = detail;
     }
+    // Urgent composes `Needs you · <reason> · <elapsed>` — paint the elapsed
+    // segment now so a state flip to urgent shows the whole line immediately,
+    // without waiting for the next 1-Hz tick.
+    if (lastKnownState === 'urgent') tickElapsed();
     refreshPendingWaitingLabel();
   }
 
