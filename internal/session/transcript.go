@@ -134,9 +134,29 @@ type Turn struct {
 }
 
 // ToolCall: the folded summary of an assistant tool_use block.
+//
+// FilePath and Command hold the raw input value for the tools that care —
+// Edit/Write/MultiEdit expose FilePath, Bash exposes Command. DiffPreview is a
+// short sample (a handful of − / + lines) the sheet shows above the fold;
+// DiffFull is the complete synthesized diff for the in-sheet expander. Both
+// are empty for tools that have no diff to render. The fields stay raw: the
+// client renders them with textContent, so a payload with "<script>" or any
+// other HTML cannot create DOM nodes.
 type ToolCall struct {
-	Name string `json:"name"` // "Bash", "Edit", ...
-	Args string `json:"args"` // one-line summary of the tool input
+	Name        string     `json:"name"`                   // "Bash", "Edit", ...
+	Args        string     `json:"args"`                   // one-line summary of the tool input
+	FilePath    string     `json:"file_path,omitempty"`    // Edit/Write/MultiEdit target path
+	Command     string     `json:"command,omitempty"`      // Bash command, verbatim
+	DiffPreview []DiffLine `json:"diff_preview,omitempty"` // first few − / + lines (for the sheet's collapsed preview)
+	DiffFull    []DiffLine `json:"diff_full,omitempty"`    // full synthesized diff (Edit/Write/MultiEdit)
+}
+
+// DiffLine: one row of a synthesized diff. Kind is "ctx" | "del" | "add";
+// Text is the line verbatim, with no leading "+" / "−" marker — the client
+// renders the marker from Kind so the server never has to escape user text.
+type DiffLine struct {
+	Kind string `json:"kind"`
+	Text string `json:"text"`
 }
 
 // PastedSpan marks a slice of a user turn's Text that was originally wrapped
@@ -442,7 +462,7 @@ func parseTurn(line []byte) (Turn, bool) {
 				text.WriteString(s)
 			}
 		case "tool_use":
-			tool = &ToolCall{Name: b.Name, Args: summarizeToolInput(b.Input)}
+			tool = buildToolCall(b.Name, b.Input)
 		case "tool_result":
 			toolErrored = toolErrored || b.IsError
 			if s := summarizeToolResult(b.Content); s != "" {
@@ -623,6 +643,138 @@ func firstNonEmptyLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// diffPreviewMaxLines caps how many − / + lines the sheet shows above its
+// Full-diff expander. A single tap must still be enough to tell what is being
+// approved; anything beyond this count is only reachable through the expander.
+const diffPreviewMaxLines = 6
+
+// buildToolCall folds a tool_use block into the row the client renders. It
+// always sets Name and Args (the one-line summary the existing UI shows);
+// Edit/Write/MultiEdit and Bash also populate the structured preview fields
+// the permission sheet needs.
+func buildToolCall(name string, input json.RawMessage) *ToolCall {
+	tc := &ToolCall{Name: name, Args: summarizeToolInput(input)}
+	if len(input) == 0 {
+		return tc
+	}
+	switch name {
+	case "Edit":
+		populateEdit(tc, input)
+	case "Write":
+		populateWrite(tc, input)
+	case "MultiEdit":
+		populateMultiEdit(tc, input)
+	case "Bash":
+		populateBash(tc, input)
+	}
+	return tc
+}
+
+// populateEdit reads {file_path, old_string, new_string} and synthesizes a
+// diff: every line of old_string is a "del", every line of new_string is an
+// "add". There is no shared-context detection — Claude's own "Edit" semantics
+// are "replace this block with that block", and the user only needs to see
+// the two sides to decide.
+func populateEdit(tc *ToolCall, raw json.RawMessage) {
+	var in struct {
+		FilePath  string `json:"file_path"`
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return
+	}
+	tc.FilePath = in.FilePath
+	tc.DiffFull = synthesizeEditDiff(in.OldString, in.NewString)
+	tc.DiffPreview = headDiffLines(tc.DiffFull, diffPreviewMaxLines)
+}
+
+// populateWrite treats a Write as an Edit whose old side is empty: every line
+// of content is an "add". file_path drives the preview label.
+func populateWrite(tc *ToolCall, raw json.RawMessage) {
+	var in struct {
+		FilePath string `json:"file_path"`
+		Content  string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return
+	}
+	tc.FilePath = in.FilePath
+	tc.DiffFull = synthesizeEditDiff("", in.Content)
+	tc.DiffPreview = headDiffLines(tc.DiffFull, diffPreviewMaxLines)
+}
+
+// populateMultiEdit concatenates the synthesized diff of each edit in input
+// order, so one tool call reads as one diff — the sheet already has to be
+// compact, a per-edit header would make the preview noisier for no gain.
+func populateMultiEdit(tc *ToolCall, raw json.RawMessage) {
+	var in struct {
+		FilePath string `json:"file_path"`
+		Edits    []struct {
+			OldString string `json:"old_string"`
+			NewString string `json:"new_string"`
+		} `json:"edits"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return
+	}
+	tc.FilePath = in.FilePath
+	var full []DiffLine
+	for _, e := range in.Edits {
+		full = append(full, synthesizeEditDiff(e.OldString, e.NewString)...)
+	}
+	tc.DiffFull = full
+	tc.DiffPreview = headDiffLines(full, diffPreviewMaxLines)
+}
+
+// populateBash just lifts the command string. There is no diff — the sheet
+// renders Command as a single mono block instead.
+func populateBash(tc *ToolCall, raw json.RawMessage) {
+	var in struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return
+	}
+	tc.Command = in.Command
+}
+
+// synthesizeEditDiff builds the DiffLine slice an Edit / Write / MultiEdit
+// replacement represents: each line of old is a "del", each line of new is an
+// "add". A trailing newline in either side produces an extra empty line, so
+// the caller sees the exact shape Claude will write.
+func synthesizeEditDiff(oldSide, newSide string) []DiffLine {
+	var out []DiffLine
+	if oldSide != "" {
+		for _, line := range strings.Split(oldSide, "\n") {
+			out = append(out, DiffLine{Kind: "del", Text: line})
+		}
+	}
+	if newSide != "" {
+		for _, line := range strings.Split(newSide, "\n") {
+			out = append(out, DiffLine{Kind: "add", Text: line})
+		}
+	}
+	return out
+}
+
+// headDiffLines returns the first n lines of a diff, or the whole slice when
+// it's shorter. Used for the preview; the client checks len(DiffFull) >
+// len(DiffPreview) to decide whether the Full-diff expander is worth showing.
+func headDiffLines(full []DiffLine, n int) []DiffLine {
+	if len(full) <= n {
+		if len(full) == 0 {
+			return nil
+		}
+		out := make([]DiffLine, len(full))
+		copy(out, full)
+		return out
+	}
+	out := make([]DiffLine, n)
+	copy(out, full[:n])
+	return out
 }
 
 // summarizeToolInput folds a tool_use input blob into one line. The exact
