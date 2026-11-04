@@ -71,8 +71,6 @@
   let lastKnownMarks = '';
   let lastKnownSub = 0;
   let lastKnownSince = 0;
-  let lastKnownDir = '';
-  let lastKnownName = '';
   let inputDirty = false;
   // The send guard asks the user to confirm when the pane's input box already
   // has text; a second Send click within this window goes through.
@@ -491,6 +489,10 @@
   // prompt tends to carry a verb clause after "to"; keep the first sentence.
   function compactPermission(prompt) {
     if (!prompt) return 'Permission requested';
+    // indexOf runs on a lowercase copy to match case-insensitively, but the
+    // slice offset is the same because toLowerCase() preserves byte offsets
+    // for the ASCII marker "do you want to " — the original casing of `rest`
+    // is what we want to surface.
     const idx = prompt.toLowerCase().indexOf('do you want to ');
     if (idx >= 0) {
       let rest = prompt.slice(idx + 'do you want to '.length).trim();
@@ -501,9 +503,12 @@
     return firstLine || 'Permission requested';
   }
 
-  // "done <N>m ago" — rounds down, minimum 0m. row.since from the API is seconds.
+  // "<N>m" / "<N>h" — rounds down. Returns '' when the timestamp is unknown
+  // (row.since is 0 before the first state tick), so the caller can drop the
+  // "done <N> ago" clause instead of flashing "done 0m ago". row.since is
+  // seconds since epoch.
   function fmtMinutesAgo(sinceSec) {
-    if (!sinceSec) return '0m';
+    if (!sinceSec) return '';
     const now = Math.floor(Date.now() / 1000);
     const delta = Math.max(0, now - sinceSec);
     const m = Math.floor(delta / 60);
@@ -513,11 +518,18 @@
     return h + 'h';
   }
 
+  // "done <N> ago · no alerts" for a known since; just "no alerts" before the
+  // first tick. Used by paused and idle (non-empty) states.
+  function doneAgoDetail() {
+    const ago = fmtMinutesAgo(lastKnownSince);
+    return ago ? ('done ' + ago + ' ago · no alerts') : 'no alerts';
+  }
+
   // Build the strip's detail segment for the current state.
   function stripDetail() {
     const paused = lastKnownMarks === 'paused';
     const empty = allTurns.length === 0;
-    if (paused) return 'done ' + fmtMinutesAgo(lastKnownSince) + ' ago · no alerts';
+    if (paused) return doneAgoDetail();
     switch (lastKnownState) {
       case 'proc': {
         const tool = latestPendingTool();
@@ -536,7 +548,7 @@
       case 'idle':
       default:
         if (empty) return 'new session';
-        return 'done ' + fmtMinutesAgo(lastKnownSince) + ' ago · no alerts';
+        return doneAgoDetail();
     }
   }
 
@@ -558,8 +570,6 @@
     lastKnownMarks = row.marks || '';
     lastKnownSub = row.sub || 0;
     lastKnownSince = row.since || 0;
-    if (typeof row.dir === 'string') lastKnownDir = row.dir;
-    if (typeof row.name === 'string' && row.name) lastKnownName = row.name;
     // row.prompt is set only when a dialog is up; keep the last known value when
     // the server omits it mid-stream, so the banner does not blank between ticks.
     if (typeof row.prompt === 'string' && row.prompt) {
@@ -841,12 +851,6 @@
   }
   replyEl.addEventListener('input', syncComposer);
   syncComposer();
-  document.querySelectorAll('button.qk').forEach((b) => {
-    b.addEventListener('click', () => {
-      const k = b.getAttribute('data-key');
-      if (k) callKey(k);
-    });
-  });
   if (stripStopEl) {
     stripStopEl.addEventListener('click', () => callKey('esc'));
   }
