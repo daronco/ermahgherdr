@@ -159,7 +159,8 @@
       return [{ text: parts.join(' · ') }];
     }
     // Plain idle.
-    const parts = ['Idle', 'no turns yet'];
+    const parts = ['Idle'];
+    if (!s.sub || s.sub === 0) parts.push('no turns yet');
     const pane = paneLabel(s.pane);
     if (pane) parts.push(pane);
     return [{ text: parts.join(' · ') }];
@@ -308,7 +309,6 @@
   function setConn(state) {
     const live = state === 'live';
     liveDotEl.classList.toggle('on', live);
-    liveDotEl.classList.toggle('off', !live);
   }
 
   // Primary channel: SSE. The browser handles reconnects, so a dropped
@@ -371,16 +371,7 @@
     if (list.length === 0) {
       // If currently expanded (user clicked it, then every non-Claude pane
       // went away), collapse before hiding so aria stays coherent.
-      if (otherExpanded) {
-        otherExpanded = false;
-        otherToggleEl.setAttribute('aria-expanded', 'false');
-        otherListEl.hidden = true;
-        otherToggleEl.classList.remove('open');
-        if (otherTimer) {
-          clearInterval(otherTimer);
-          otherTimer = null;
-        }
-      }
+      if (otherExpanded) setOtherExpanded(false);
       otherGroupEl.hidden = true;
       return;
     }
