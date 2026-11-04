@@ -202,20 +202,23 @@
     n.age.textContent = fmtAge(s.since);
     renderSub(n, subLine(s));
 
-    // Meta line: pane + optional neutral context bar + optional ctx NN%.
+    // Meta line: pane + optional neutral context bar + optional ctx NN%. Only
+    // done and working rows carry it; needs-you, idle and paused fold the
+    // pane/ctx info into their sub-line.
     const pane = paneLabel(s.pane);
-    n.metaPane.textContent = pane;
     const ctx = parseInt(s.ctx, 10);
     const hasCtx = !isNaN(ctx) && ctx >= 0;
-    n.ctxBar.hidden = !hasCtx;
-    n.metaCtx.hidden = !hasCtx;
-    if (hasCtx) {
-      n.ctxFill.style.width = Math.min(100, Math.max(0, ctx)) + '%';
-      n.metaCtx.textContent = 'ctx ' + ctx + '%';
-    }
-    // The dai pin and the empty-list card show no meta line.
-    const showMeta = !s.dai && !!pane;
+    const showMeta = !s.dai && !!pane && (s.state === 'done' || s.state === 'proc') && s.marks !== 'paused';
     n.metaPane.parentElement.hidden = !showMeta;
+    if (showMeta) {
+      n.metaPane.textContent = pane;
+      n.ctxBar.hidden = !hasCtx;
+      n.metaCtx.hidden = !hasCtx;
+      if (hasCtx) {
+        n.ctxFill.style.width = Math.min(100, Math.max(0, ctx)) + '%';
+        n.metaCtx.textContent = 'ctx ' + ctx + '%';
+      }
+    }
 
     // Actions: Review button on needs-you rows, nothing otherwise.
     n.actions.innerHTML = '';
