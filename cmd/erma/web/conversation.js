@@ -47,6 +47,7 @@
   const replyEl = document.getElementById('reply');
   const sendBtn = document.getElementById('send');
   const voiceBtn = document.getElementById('voice');
+  const expandBtn = document.getElementById('expand');
   const earlierBtn = document.getElementById('earlier');
   const toastEl = document.getElementById('toast');
   const sendWarnEl = document.getElementById('send-warn');
@@ -54,6 +55,9 @@
   const stripStateEl = document.getElementById('strip-state');
   const stripToolEl = document.getElementById('strip-tool');
   const stripElapsedEl = document.getElementById('strip-elapsed');
+  const offlineEl = document.getElementById('offline-banner');
+  const offlineMsgEl = document.getElementById('offline-msg');
+  const offlineRetryEl = document.getElementById('offline-retry');
 
   // The CSRF token issued by GET /conversation. Needed on every POST. The
   // conversation GET refreshes it; if we have none yet, state-changing POSTs
@@ -84,9 +88,31 @@
   let lastUserTs = Date.now();
   let elapsedTimer = 0;
 
+  // Offline detection: SSE error / heartbeat gap / failed POST all funnel into
+  // applyOnline(). lastActivityTs is refreshed on every SSE event; the
+  // watchdog flips offline when the gap exceeds HEARTBEAT_GAP_MS.
+  let online = true;
+  let lastActivityTs = Date.now();
+  let lastStateLabel = 'idle';
+  // Wall-clock of the last state/delta tick, surfaced in the banner & strip as HH:MM.
+  let lastUpdateHHMM = fmtTime(Date.now());
+  let heartbeatTimer = 0;
+  let countdownTimer = 0;
+  let retrySecsLeft = 5;
+  const HEARTBEAT_GAP_MS = 15000;
+  const RETRY_COUNTDOWN_SECS = 5;
+  // Pending failed turns awaiting an explicit Retry — key is _localId, value the text.
+  const failedTexts = new Map();
+
   function setConn(state) {
     connEl.className = 'status ' + state;
-    connEl.textContent = state === 'live' ? '●' : state === 'lost' ? '✕' : '·';
+    if (state === 'lost' || !online) {
+      connEl.textContent = 'Offline';
+      connEl.classList.add('pill-offline');
+    } else {
+      connEl.textContent = state === 'live' ? '●' : '·';
+      connEl.classList.remove('pill-offline');
+    }
   }
 
   function fmtTime(ts) {
@@ -433,7 +459,8 @@
 
   // updateStrip refreshes the state label and the running tool from the
   // current turn store and the last seen SSE state. It runs on both state
-  // updates and delta appends — nothing polls.
+  // updates and delta appends — nothing polls. While offline the strip is
+  // rewritten to recall the prior state instead.
   function updateStrip() {
     if (!stripEl) return;
     let label;
@@ -444,11 +471,103 @@
       case 'idle':   label = 'idle'; break;
       default:       label = lastKnownState || 'idle';
     }
+    lastStateLabel = label;
+    if (!online) {
+      if (stripStateEl) stripStateEl.textContent = 'Offline';
+      if (stripToolEl) stripToolEl.textContent = 'last update ' + lastUpdateHHMM + ' · was ' + label;
+      return;
+    }
     if (stripStateEl) stripStateEl.textContent = label;
     if (stripToolEl) {
       const tool = lastKnownState === 'proc' ? latestPendingTool() : '';
       stripToolEl.textContent = tool;
     }
+  }
+
+  // applyOnline — single entry point for every offline/online transition.
+  // Toggles the banner, strip, and header pill in lock-step and starts /
+  // stops the retry countdown. The transport-layer sensors (SSE error,
+  // failed POST, heartbeat gap) all come through here.
+  function applyOnline(flag) {
+    const was = online;
+    online = !!flag;
+    document.body.classList.toggle('offline', !online);
+    if (!online) {
+      if (was) {
+        // First edge offline → freeze the HH:MM, start the countdown.
+        lastUpdateHHMM = fmtTime(Date.now());
+        startCountdown();
+      }
+      showOfflineBanner();
+      updateStrip();
+      setConn('lost');
+    } else {
+      stopCountdown();
+      hideOfflineBanner();
+      updateStrip();
+      setConn('live');
+      bumpHeartbeat();
+    }
+  }
+
+  function showOfflineBanner() {
+    if (!offlineEl) return;
+    if (offlineMsgEl) {
+      offlineMsgEl.textContent = "Can't reach the laptop. Showing state from " + lastUpdateHHMM + '.';
+    }
+    renderCountdown();
+    offlineEl.hidden = false;
+  }
+
+  function hideOfflineBanner() {
+    if (!offlineEl) return;
+    offlineEl.hidden = true;
+  }
+
+  function renderCountdown() {
+    if (!offlineRetryEl) return;
+    offlineRetryEl.textContent = 'retry ' + retrySecsLeft + 's';
+  }
+
+  function startCountdown() {
+    retrySecsLeft = RETRY_COUNTDOWN_SECS;
+    renderCountdown();
+    stopCountdown();
+    countdownTimer = setInterval(() => {
+      retrySecsLeft -= 1;
+      if (retrySecsLeft <= 0) {
+        retrySecsLeft = RETRY_COUNTDOWN_SECS;
+      }
+      renderCountdown();
+    }, 1000);
+  }
+
+  function stopCountdown() {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = 0;
+    }
+  }
+
+  // Heartbeat watchdog: any SSE event resets it; if nothing arrives for
+  // HEARTBEAT_GAP_MS the socket is assumed half-open and we flip offline so
+  // the UI reflects reality before the browser's own reconnect fires.
+  function bumpHeartbeat() {
+    lastActivityTs = Date.now();
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
+    heartbeatTimer = setTimeout(() => {
+      if (Date.now() - lastActivityTs >= HEARTBEAT_GAP_MS) {
+        applyOnline(false);
+      }
+    }, HEARTBEAT_GAP_MS + 500);
+  }
+
+  // Classify a fetch failure (thrown error, or !res.ok with a transport-shaped
+  // status) as evidence the laptop is unreachable.
+  function isTransportFailure(res) {
+    if (!res) return true;
+    const s = res.status;
+    return s === 0 || s === 502 || s === 503 || s === 504;
   }
 
   function applyState(row) {
@@ -581,13 +700,21 @@
 
   async function callKey(key) {
     if (!csrf) return;
-    const res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/key', {
-      method: 'POST',
-      headers: { 'X-Erma-CSRF': csrf, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key }),
-    });
+    let res;
+    try {
+      res = await fetch('/api/sessions/' + encodeURIComponent(SID) + '/key', {
+        method: 'POST',
+        headers: { 'X-Erma-CSRF': csrf, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+    } catch (e) {
+      console.warn('key', key, e);
+      applyOnline(false);
+      return;
+    }
     if (!res.ok) {
       console.warn('key', key, res.status);
+      if (isTransportFailure(res)) applyOnline(false);
       return;
     }
     showToast('sent ' + key);
@@ -627,28 +754,33 @@
       });
       if (!res.ok) {
         console.warn('text', res.status);
-        markPendingFailed(localId);
+        markPendingFailed(localId, text);
+        if (isTransportFailure(res)) applyOnline(false);
       } else {
         replyEl.value = '';
+        autosizeReply();
         sendConfirm = false;
         clearSendWarn();
         showToast('sent');
       }
     } catch (e) {
       console.warn('text', e);
-      markPendingFailed(localId);
+      markPendingFailed(localId, text);
+      applyOnline(false);
     } finally {
       sendBtn.disabled = false;
       replyEl.focus();
     }
   }
 
-  function markPendingFailed(localId) {
+  function markPendingFailed(localId, text) {
     const li = turnsEl.querySelector('li[data-local-id="' + CSS.escape(localId) + '"]');
     if (li) {
       li.classList.remove('turn-pending');
       li.classList.add('turn-failed');
+      renderFailedAffordance(li, localId, text);
     }
+    failedTexts.set(localId, text);
     // The echo is no longer waiting on a server match — a late user turn on
     // the stream (manual retry, server echo) should not reconcile against it.
     for (let i = 0; i < pendingEchoes.length; i++) {
@@ -659,17 +791,62 @@
     }
   }
 
+  // Build the "Not sent · laptop unreachable" affordance with Edit / Retry
+  // buttons. Edit rehydrates the composer and removes the row; Retry re-POSTs
+  // the same payload exactly once per tap.
+  function renderFailedAffordance(li, localId, text) {
+    // Guard against double-render if markPendingFailed runs twice for the row.
+    if (li.querySelector('.failed-actions')) return;
+    const notice = document.createElement('div');
+    notice.className = 'failed-notice';
+    notice.textContent = 'Not sent · laptop unreachable';
+    li.appendChild(notice);
+
+    const actions = document.createElement('div');
+    actions.className = 'failed-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'failed-edit';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => {
+      replyEl.value = text;
+      autosizeReply();
+      replyEl.focus();
+      failedTexts.delete(localId);
+      li.remove();
+    });
+
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'failed-retry';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', () => {
+      // One tap = one POST. Drop the current row so the retry starts clean;
+      // callText renders a new pending echo and, on failure, a new failed row.
+      failedTexts.delete(localId);
+      li.remove();
+      callText(text);
+    });
+
+    actions.appendChild(editBtn);
+    actions.appendChild(retryBtn);
+    li.appendChild(actions);
+  }
+
   // SSE connect: tails /stream from the cursor the page already has, routes
   // `conversation` | `delta` | `state`. A reconnect resumes by Last-Event-ID.
   function connect() {
     setConn('wait');
     const es = new EventSource('/api/sessions/' + encodeURIComponent(SID) + '/stream?after=' + cursor);
-    es.addEventListener('open', () => setConn('live'));
-    es.addEventListener('error', () => setConn('lost'));
+    es.addEventListener('open', () => applyOnline(true));
+    es.addEventListener('error', () => applyOnline(false));
     es.addEventListener('conversation', (ev) => {
+      bumpHeartbeat();
       try {
         // The transcript was rotated or truncated: a fresh tail replaces the list.
         const payload = JSON.parse(ev.data);
+        lastUpdateHHMM = fmtTime(Date.now());
         resetTurns(payload.turns);
         setStart(payload.start);
         cursor = payload.cursor;
@@ -678,8 +855,10 @@
       }
     });
     es.addEventListener('delta', (ev) => {
+      bumpHeartbeat();
       try {
         const payload = JSON.parse(ev.data);
+        lastUpdateHHMM = fmtTime(Date.now());
         appendTurns(payload.turns);
         cursor = payload.cursor;
       } catch (e) {
@@ -687,7 +866,9 @@
       }
     });
     es.addEventListener('state', (ev) => {
+      bumpHeartbeat();
       try {
+        lastUpdateHHMM = fmtTime(Date.now());
         applyState(JSON.parse(ev.data));
       } catch (e) {
         console.error('state', e);
@@ -706,6 +887,44 @@
       callText(replyEl.value);
     }
   });
+  // Autosize: grow the textarea with the text up to ~5 lines of body font,
+  // then let the internal scrollbar take over. Expand mode toggles a class
+  // that pins it to the full viewport; the typed text survives either way.
+  const AUTOSIZE_MAX_LINES = 5;
+  const composerEl = document.querySelector('#tab-conversation > .composer');
+  function autosizeReply() {
+    if (!replyEl || !composerEl) return;
+    if (composerEl.classList.contains('expanded')) return;
+    replyEl.style.height = 'auto';
+    const cs = window.getComputedStyle(replyEl);
+    const lh = parseFloat(cs.lineHeight) || 20;
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    const padBot = parseFloat(cs.paddingBottom) || 0;
+    const borderTop = parseFloat(cs.borderTopWidth) || 0;
+    const borderBot = parseFloat(cs.borderBottomWidth) || 0;
+    const maxH = Math.round(lh * AUTOSIZE_MAX_LINES + padTop + padBot + borderTop + borderBot);
+    const want = replyEl.scrollHeight + borderTop + borderBot;
+    const next = Math.min(want, maxH);
+    replyEl.style.height = next + 'px';
+    replyEl.style.overflowY = want > maxH ? 'auto' : 'hidden';
+  }
+  replyEl.addEventListener('input', autosizeReply);
+  if (expandBtn && composerEl) {
+    expandBtn.addEventListener('click', () => {
+      const nowExpanded = !composerEl.classList.contains('expanded');
+      composerEl.classList.toggle('expanded', nowExpanded);
+      expandBtn.setAttribute('aria-pressed', nowExpanded ? 'true' : 'false');
+      if (nowExpanded) {
+        // Full-viewport mode: drop the autosize inline style so CSS sizes it.
+        replyEl.style.height = '';
+        replyEl.style.overflowY = 'auto';
+      } else {
+        autosizeReply();
+      }
+      replyEl.focus();
+    });
+  }
+  autosizeReply();
   document.querySelectorAll('button.qk').forEach((b) => {
     b.addEventListener('click', () => {
       const k = b.getAttribute('data-key');
@@ -799,6 +1018,7 @@
       console.error('boot', e);
     }
     connect();
+    bumpHeartbeat();
     updateStrip();
   })();
 

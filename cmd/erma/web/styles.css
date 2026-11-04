@@ -522,12 +522,43 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .qk.danger { color: var(--err); border-color: var(--err-line); }
 
 .replybox { display: flex; align-items: flex-end; gap: 6px; }
+.replyfield { position: relative; flex: 1; display: flex; }
 .replybox textarea {
-  flex: 1; min-height: 44px; max-height: 180px;
+  flex: 1; min-height: 44px;
   background: var(--sunk); color: var(--text); border: 1px solid var(--line);
-  border-radius: var(--r-sm); padding: 10px; font: inherit; resize: vertical;
+  border-radius: var(--r-sm); padding: 10px; padding-right: 40px;
+  font: inherit; resize: none; overflow-y: hidden;
+  line-height: 1.45;
 }
+.expand {
+  position: absolute; top: 6px; right: 6px;
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--text-2);
+  border: 0; border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.expand:active { filter: brightness(1.2); }
+.expand:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.composer.expanded .expand { color: var(--accent); }
 .replybtns { display: flex; gap: 6px; }
+
+/* Expanded composer: pins the textarea to (effectively) the full viewport
+   height, hides the quick-key bar, and raises the composer above the strip.
+   The typed text is preserved because the textarea node itself is untouched. */
+.composer.expanded {
+  top: var(--sticky-under-tabs, 86px);
+  display: flex;
+  flex-direction: column;
+  z-index: 6;
+}
+.composer.expanded .qkbar { display: none; }
+.composer.expanded .replybox { flex: 1; align-items: stretch; }
+.composer.expanded .replyfield { flex: 1; }
+.composer.expanded .replybox textarea {
+  flex: 1; height: 100%; max-height: none;
+  overflow-y: auto;
+}
 .send, .voice {
   background: var(--accent); color: var(--on-accent); border: 0; border-radius: var(--r-sm);
   padding: 10px 16px; font-weight: 700; cursor: pointer;
@@ -590,15 +621,93 @@ body.state-idle   .strip-state  { color: var(--text-3); }
   font-style: italic;
 }
 .turn-failed {
-  opacity: 0.95;
-  border-left-color: var(--err);
+  opacity: 1;
+  background: transparent;
+  border-left-color: var(--you);
+  box-shadow: inset 0 0 0 1px var(--you-line);
 }
-.turn-failed .turn-ts::after {
-  content: ' · failed';
-  color: var(--err);
+.turn-failed .failed-notice {
+  margin-top: 6px;
+  display: flex; align-items: center; gap: 6px;
+  color: var(--you);
+  font-size: 12px; font-weight: 600;
+}
+.turn-failed .failed-actions {
+  margin-top: 6px;
+  display: flex; gap: 8px;
+}
+.turn-failed .failed-edit,
+.turn-failed .failed-retry {
+  min-height: 36px; padding: 6px 12px;
+  border-radius: var(--r-btn);
+  font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer;
+}
+.turn-failed .failed-edit {
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.turn-failed .failed-retry {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--accent);
+}
+.turn-failed .failed-edit:active,
+.turn-failed .failed-retry:active { filter: brightness(1.1); }
+
+/* ------------------------------------------------------------------
+   Offline state: banner between .tabs and the transcript, Offline pill in
+   the header, and the "was <state>" strip rewrite. Everything hides again
+   as soon as the SSE stream re-opens.
+   ------------------------------------------------------------------ */
+.offline-banner {
+  position: sticky; top: var(--sticky-under-tabs, 86px); z-index: 2;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.offline-banner .offline-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+}
+.offline-banner .offline-msg { flex: 1; min-width: 0; }
+.offline-banner .offline-retry {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.status.pill-offline {
+  color: var(--text-2);
   font-weight: 600;
-  font-style: normal;
+  letter-spacing: 0.02em;
 }
+
+/* While offline the strip stops recolouring by state (that information is now
+   folded into the "was <label>" detail line instead). The border reverts to
+   the neutral line token; the state label reads "Offline" in --text-2. */
+body.offline .status-strip,
+body.offline.state-proc .status-strip,
+body.offline.state-urgent .status-strip,
+body.offline.state-done .status-strip,
+body.offline.state-idle .status-strip {
+  border-top-color: var(--line);
+  background: var(--sunk);
+}
+body.offline .strip-state,
+body.offline.state-proc .strip-state,
+body.offline.state-urgent .strip-state,
+body.offline.state-done .strip-state,
+body.offline.state-idle .strip-state {
+  color: var(--text-2);
+}
+body.offline .strip-tool { color: var(--text-3); font-family: var(--sans); }
 
 /* ------------------------------------------------------------------
    Tab strip + Terminal tab (session view)

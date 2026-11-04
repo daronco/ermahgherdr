@@ -23,6 +23,12 @@
     <button class="tab" role="tab" data-tab="terminal" aria-selected="false">Terminal</button>
   </nav>
 
+  <section id="offline-banner" class="offline-banner" role="status" aria-live="polite" hidden>
+    <span class="offline-dot" aria-hidden="true"></span>
+    <span class="offline-msg" id="offline-msg"></span>
+    <span class="offline-retry" id="offline-retry"></span>
+  </section>
+
   <section id="perm-banner" class="perm-banner" hidden>
     <div class="perm-head">Permission requested</div>
     <div class="perm-body" id="perm-body"></div>
@@ -51,7 +57,12 @@
       </div>
       <p id="send-warn" class="send-warn" hidden></p>
       <div class="replybox">
-        <textarea id="reply" rows="2" placeholder="type a reply, Enter to send"></textarea>
+        <div class="replyfield">
+          <textarea id="reply" rows="1" placeholder="type a reply, Enter to send"></textarea>
+          <button id="expand" class="expand" type="button" title="Toggle full-screen editor" aria-label="Toggle full-screen editor" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>
+          </button>
+        </div>
         <div class="replybtns">
           <button id="voice" class="voice" type="button" title="Dictate (pt-BR)" aria-label="Dictate reply (pt-BR)" aria-pressed="false" hidden>🎙</button>
           <button id="send" class="send" title="Send">Send</button>
