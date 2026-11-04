@@ -16,10 +16,13 @@
   }
 
   const titleEl = document.getElementById('conv-title');
+  const dirEl = document.getElementById('conv-dir');
+  const pillEl = document.getElementById('conv-pill');
   const badgeEl = document.getElementById('conv-badge');
   const connEl = document.getElementById('conv-conn');
   const turnsEl = document.getElementById('turns');
   const emptyEl = document.getElementById('conv-empty');
+  const emptyDirEl = document.getElementById('conv-empty-dir');
 
   // Stack the sticky tab strip and permission banner under the real header
   // heights; they change with the safe-area inset and the title wrapping.
@@ -52,8 +55,10 @@
   const sendWarnEl = document.getElementById('send-warn');
   const stripEl = document.getElementById('status-strip');
   const stripStateEl = document.getElementById('strip-state');
-  const stripToolEl = document.getElementById('strip-tool');
+  const stripDetailEl = document.getElementById('strip-detail');
   const stripElapsedEl = document.getElementById('strip-elapsed');
+  const stripStopEl = document.getElementById('strip-stop');
+  const composerEl = document.getElementById('composer');
 
   // The CSRF token issued by GET /conversation. Needed on every POST. The
   // conversation GET refreshes it; if we have none yet, state-changing POSTs
@@ -62,6 +67,12 @@
   let lastKnownState = ''; // for the permission banner
   let latestScreenPrompt = '';
   let latestChoices = [];
+  // Sticky view of the latest row fields the strip + header need to reflect.
+  let lastKnownMarks = '';
+  let lastKnownSub = 0;
+  let lastKnownSince = 0;
+  let lastKnownDir = '';
+  let lastKnownName = '';
   let inputDirty = false;
   // The send guard asks the user to confirm when the pane's input box already
   // has text; a second Send click within this window goes through.
@@ -82,10 +93,12 @@
   // Timestamp of the newest user message — either sent locally or arrived on
   // the stream. The elapsed counter in the status strip reads from here.
   let lastUserTs = Date.now();
+  // Timestamp of the newest assistant turn seen — feeds the done/idle detail.
+  let lastAssistantTs = 0;
   let elapsedTimer = 0;
 
   function setConn(state) {
-    connEl.className = 'status ' + state;
+    connEl.className = 'status conv-conn ' + state;
     connEl.textContent = state === 'live' ? '●' : state === 'lost' ? '✕' : '·';
   }
 
@@ -186,6 +199,19 @@
         body.textContent = t.text;
       }
       li.appendChild(body);
+    }
+    if (t._pending) {
+      const meta = document.createElement('div');
+      meta.className = 'turn-meta turn-sending';
+      const label = document.createElement('span');
+      label.className = 'turn-sending-label';
+      label.textContent = 'Sending…';
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      meta.appendChild(spinner);
+      meta.appendChild(label);
+      li.appendChild(meta);
     }
     // An assistant turn carrying prose can still have a tool call attached;
     // render it as a one-row tool line so the reader sees what Claude went on
@@ -345,6 +371,10 @@
         const ts = t.ts ? new Date(t.ts).getTime() : Date.now();
         noteUserTurn(ts);
       }
+      if (t.role === 'assistant' && t.ts) {
+        const ts = new Date(t.ts).getTime();
+        if (!isNaN(ts) && ts > lastAssistantTs) lastAssistantTs = ts;
+      }
     }
     const wasBottom = isAtBottom();
     let i = 0;
@@ -431,29 +461,105 @@
     elapsedTimer = 0;
   }
 
-  // updateStrip refreshes the state label and the running tool from the
-  // current turn store and the last seen SSE state. It runs on both state
-  // updates and delta appends — nothing polls.
+  // stateLabel maps the row's semantic state to the design's state word. The
+  // paused mark trumps the state — a paused session reads as "paused" no matter
+  // what the underlying pane is doing.
+  function stateLabel(state, marks) {
+    if (marks === 'paused') return 'paused';
+    switch (state) {
+      case 'proc':   return 'working';
+      case 'urgent': return 'your turn';
+      case 'done':   return 'waiting';
+      case 'idle':   return 'idle';
+      default:       return state || 'idle';
+    }
+  }
+
+  // Pill copy is a shorter sibling of the strip state — the header is tight.
+  function pillLabel(state, marks) {
+    if (marks === 'paused') return 'Paused';
+    switch (state) {
+      case 'proc':   return 'Working';
+      case 'urgent': return 'Your turn';
+      case 'done':   return 'Waiting';
+      case 'idle':   return 'Idle';
+      default:       return state || 'Idle';
+    }
+  }
+
+  // Compact a prompt down to a strip-sized "Permission to <X>" line. The raw
+  // prompt tends to carry a verb clause after "to"; keep the first sentence.
+  function compactPermission(prompt) {
+    if (!prompt) return 'Permission requested';
+    const idx = prompt.toLowerCase().indexOf('do you want to ');
+    if (idx >= 0) {
+      let rest = prompt.slice(idx + 'do you want to '.length).trim();
+      rest = rest.split(/[?.\n]/)[0].trim();
+      if (rest) return 'Permission to ' + rest;
+    }
+    const firstLine = prompt.split(/\n/)[0].trim();
+    return firstLine || 'Permission requested';
+  }
+
+  // "done <N>m ago" — rounds down, minimum 0m. row.since from the API is seconds.
+  function fmtMinutesAgo(sinceSec) {
+    if (!sinceSec) return '0m';
+    const now = Math.floor(Date.now() / 1000);
+    const delta = Math.max(0, now - sinceSec);
+    const m = Math.floor(delta / 60);
+    if (m < 1) return '<1m';
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    return h + 'h';
+  }
+
+  // Build the strip's detail segment for the current state.
+  function stripDetail() {
+    const paused = lastKnownMarks === 'paused';
+    const empty = allTurns.length === 0;
+    if (paused) return 'done ' + fmtMinutesAgo(lastKnownSince) + ' ago · no alerts';
+    switch (lastKnownState) {
+      case 'proc': {
+        const tool = latestPendingTool();
+        const sub = lastKnownSub > 0
+          ? (lastKnownSub + ' subagent' + (lastKnownSub === 1 ? '' : 's'))
+          : '';
+        if (tool && sub) return tool + ' · ' + sub;
+        if (tool) return tool;
+        if (sub) return sub;
+        return '';
+      }
+      case 'urgent':
+        return compactPermission(latestScreenPrompt);
+      case 'done':
+        return lastAssistantTs ? ('last reply ' + fmtTime(lastAssistantTs)) : '';
+      case 'idle':
+      default:
+        if (empty) return 'new session';
+        return 'done ' + fmtMinutesAgo(lastKnownSince) + ' ago · no alerts';
+    }
+  }
+
+  // updateStrip refreshes the state word, detail, and Stop toggle. It runs on
+  // state updates and delta appends — nothing polls.
   function updateStrip() {
     if (!stripEl) return;
-    let label;
-    switch (lastKnownState) {
-      case 'proc':   label = 'working'; break;
-      case 'urgent': label = 'your turn'; break;
-      case 'done':   label = 'waiting on you'; break;
-      case 'idle':   label = 'idle'; break;
-      default:       label = lastKnownState || 'idle';
-    }
-    if (stripStateEl) stripStateEl.textContent = label;
-    if (stripToolEl) {
-      const tool = lastKnownState === 'proc' ? latestPendingTool() : '';
-      stripToolEl.textContent = tool;
-    }
+    const paused = lastKnownMarks === 'paused';
+    if (stripStateEl) stripStateEl.textContent = stateLabel(lastKnownState, lastKnownMarks);
+    if (stripDetailEl) stripDetailEl.textContent = stripDetail();
+    if (stripStopEl) stripStopEl.hidden = !(lastKnownState === 'proc' && !paused);
+    // Top-border color is driven by a body class (set in applyState). Paused
+    // sessions cancel the proc/urgent border; the class toggle handles that.
   }
 
   function applyState(row) {
     if (!row) return;
     lastKnownState = row.state || '';
+    lastKnownMarks = row.marks || '';
+    lastKnownSub = row.sub || 0;
+    lastKnownSince = row.since || 0;
+    if (typeof row.dir === 'string') lastKnownDir = row.dir;
+    if (typeof row.name === 'string' && row.name) lastKnownName = row.name;
     // row.prompt is set only when a dialog is up; keep the last known value when
     // the server omits it mid-stream, so the banner does not blank between ticks.
     if (typeof row.prompt === 'string' && row.prompt) {
@@ -474,17 +580,28 @@
       clearSendWarn();
     }
     inputDirty = nextDirty;
-    document.body.classList.remove('state-idle', 'state-done', 'state-proc', 'state-urgent');
-    if (row.state) document.body.classList.add('state-' + row.state);
+    document.body.classList.remove(
+      'state-idle', 'state-done', 'state-proc', 'state-urgent', 'state-paused',
+    );
+    if (row.marks === 'paused') document.body.classList.add('state-paused');
+    else if (row.state) document.body.classList.add('state-' + row.state);
     titleEl.textContent = row.name || row.pane || SID;
-    const parts = [];
-    if (row.state === 'urgent') parts.push('PERM');
-    else if (row.state === 'done') parts.push('DONE');
-    else if (row.state === 'proc') parts.push('…');
-    if (row.sub > 0) parts.push('⤷' + row.sub);
-    badgeEl.textContent = parts.join(' · ');
+    dirEl.textContent = row.dir || '';
+    dirEl.hidden = !row.dir;
+    updatePill(row);
+    if (emptyDirEl) emptyDirEl.textContent = row.dir || '';
     renderPermBanner();
     updateStrip();
+  }
+
+  // The header pill is colour-coded and carries the per-state word. --you is
+  // solid (urgent dominates); other states tint into surface/text-2.
+  function updatePill(row) {
+    if (!pillEl) return;
+    const paused = row.marks === 'paused';
+    const state = paused ? 'paused' : (row.state || 'idle');
+    pillEl.className = 'pill conv-pill pill-' + state;
+    pillEl.textContent = pillLabel(row.state, row.marks);
   }
 
   // The permission banner shows whenever the row is `urgent`. The server parses
@@ -630,6 +747,7 @@
         markPendingFailed(localId);
       } else {
         replyEl.value = '';
+        if (composerEl) composerEl.classList.add('composer--empty');
         sendConfirm = false;
         clearSendWarn();
         showToast('sent');
@@ -648,6 +766,8 @@
     if (li) {
       li.classList.remove('turn-pending');
       li.classList.add('turn-failed');
+      const meta = li.querySelector('.turn-sending');
+      if (meta) meta.remove();
     }
     // The echo is no longer waiting on a server match — a late user turn on
     // the stream (manual retry, server echo) should not reconcile against it.
@@ -706,12 +826,25 @@
       callText(replyEl.value);
     }
   });
+  // The composer morphs mic ↔ send based on textarea content. The hidden state
+  // is driven by a class CSS reads — both buttons stay in the DOM so wiring on
+  // #voice (voice recognition) and #send (send POST) is untouched.
+  function syncComposer() {
+    if (!composerEl) return;
+    const hasText = replyEl.value && replyEl.value.trim().length > 0;
+    composerEl.classList.toggle('composer--empty', !hasText);
+  }
+  replyEl.addEventListener('input', syncComposer);
+  syncComposer();
   document.querySelectorAll('button.qk').forEach((b) => {
     b.addEventListener('click', () => {
       const k = b.getAttribute('data-key');
       if (k) callKey(k);
     });
   });
+  if (stripStopEl) {
+    stripStopEl.addEventListener('click', () => callKey('esc'));
+  }
 
   // Chrome / Edge voice-to-textarea. Spec: no server-side STT, pt-BR default.
   // Dictation lands in the textarea; nothing is sent until the user taps Send.
@@ -733,6 +866,7 @@
       if (!text) return;
       if (replyEl.value && !replyEl.value.endsWith(' ')) replyEl.value += ' ';
       replyEl.value += text;
+      syncComposer();
       replyEl.focus();
     });
     rec.addEventListener('end', () => setListening(false));

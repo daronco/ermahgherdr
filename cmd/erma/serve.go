@@ -60,6 +60,7 @@ type apiSession struct {
 	Prompt     string      `json:"prompt,omitempty"`      // the pending permission question, parsed off the pane's screen
 	Choices    []apiChoice `json:"choices,omitempty"`     // numbered options the dialog is offering
 	InputDirty bool        `json:"input_dirty,omitempty"` // the Claude input box already holds unsent text
+	Dir        string      `json:"dir,omitempty"`         // the pane's working directory, home-abbreviated (~/...)
 }
 
 // stateString: the state enum, in the exact spelling the front-end switches on.
@@ -96,7 +97,28 @@ func toAPI(s session.Session) apiSession {
 		State: stateString(s.St), Since: s.Since,
 		Marks: s.Flag, Sub: s.Sub, Ctx: s.Ctx, Dai: s.Dai,
 		Prompt: s.Prompt, Choices: choices, InputDirty: s.InputDirty,
+		Dir: homeAbbrev(s.Dir),
 	}
+}
+
+// homeAbbrev replaces a leading $HOME with "~" so the UI can render a compact,
+// user-familiar path. It falls through unchanged when $HOME is empty or the dir
+// does not sit under it.
+func homeAbbrev(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	home := os.Getenv("HOME")
+	if home == "" {
+		return dir
+	}
+	if dir == home {
+		return "~"
+	}
+	if strings.HasPrefix(dir, home+"/") {
+		return "~" + dir[len(home):]
+	}
+	return dir
 }
 
 // serveFlags: the subcommand's full flag set, held together so main_test can
