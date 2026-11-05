@@ -99,27 +99,37 @@
   <div id="tab-terminal" class="tab-panel" role="tabpanel" hidden>
     <main class="term-main">
       <div class="term-mode-row">
-        <button id="term-mode-toggle" class="term-mode-toggle" type="button" aria-pressed="false" aria-label="Toggle terminal display mode">fit</button>
+        <div class="term-modes" role="radiogroup" aria-label="Terminal display mode">
+          <button class="term-mode" type="button" role="radio" data-mode="wrap" aria-checked="false">Wrap</button>
+          <button class="term-mode" type="button" role="radio" data-mode="pan" aria-checked="false">Pan</button>
+          <button class="term-mode" type="button" role="radio" data-mode="fit" aria-checked="true">Fit</button>
+        </div>
+        <span class="term-status" id="term-status" aria-live="polite"></span>
       </div>
       <pre id="term-screen" class="term-screen" aria-label="terminal snapshot"></pre>
       <p id="term-empty" class="empty">loading…</p>
     </main>
     <footer class="term-keybar" role="toolbar" aria-label="terminal keys">
-      <button class="tk" data-tkey="Escape">Esc</button>
-      <button class="tk" data-tkey="Tab">Tab</button>
-      <button class="tk" data-tkey="Up">↑</button>
-      <button class="tk" data-tkey="Down">↓</button>
-      <button class="tk" data-tkey="Left">←</button>
-      <button class="tk" data-tkey="Right">→</button>
-      <button class="tk" data-tkey="Enter">↵</button>
-      <button class="tk" data-tkey="BSpace">⌫</button>
-      <button class="tk" data-tkey="C-a">^A</button>
-      <button class="tk" data-tkey="C-e">^E</button>
-      <button class="tk" data-tkey="C-u">^U</button>
-      <button class="tk" data-tkey="C-w">^W</button>
-      <button class="tk" data-tkey="C-l">^L</button>
-      <button class="tk" data-tkey="C-r">^R</button>
-      <button class="tk tk-danger" data-tkey="C-c">^C</button>
+      <div class="term-keyrow">
+        <button class="tk" data-tkey="Escape">Esc</button>
+        <button class="tk" data-tkey="Tab">Tab</button>
+        <button class="tk" data-tkey="Up">↑</button>
+        <button class="tk" data-tkey="Down">↓</button>
+        <button class="tk" data-tkey="Left">←</button>
+        <button class="tk" data-tkey="Right">→</button>
+        <button class="tk" data-tkey="Enter">↵</button>
+        <button class="tk tk-danger" data-tkey="C-c">^C</button>
+      </div>
+      <div class="term-keyrow">
+        <button class="tk" data-tkey="BSpace">⌫</button>
+        <button class="tk" data-tkey="C-a">^A</button>
+        <button class="tk" data-tkey="C-e">^E</button>
+        <button class="tk" data-tkey="C-u">^U</button>
+        <button class="tk" data-tkey="C-w">^W</button>
+        <button class="tk" data-tkey="C-l">^L</button>
+        <button class="tk" data-tkey="C-r">^R</button>
+        <button class="tk tk-ghost" id="term-focus-input" type="button" aria-label="Focus message input">⌨</button>
+      </div>
     </footer>
   </div>
 
