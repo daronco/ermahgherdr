@@ -127,7 +127,7 @@ func scanCwdByLine(r io.Reader) [][]byte {
 type Turn struct {
 	Role    string       `json:"role"`              // "user" | "assistant" | "tool_result" | "system"
 	Ts      time.Time    `json:"ts"`                // the transcript's own timestamp
-	Text    string       `json:"text"`              // user-visible text; a short summary for tool_result; the full raw body for system
+	Text    string       `json:"text"`              // user-visible text; the one-line result head for a tool_result carrier; the full raw body for system
 	Summary string       `json:"summary,omitempty"` // one-line label for a collapsed system turn
 	Tool    *ToolCall    `json:"tool,omitempty"`    // non-nil for an assistant turn whose body is a tool call
 	Pasted  []PastedSpan `json:"pasted,omitempty"`  // byte ranges in Text that were unwrapped from <pasted_content> blocks
@@ -142,6 +142,11 @@ type Turn struct {
 // are empty for tools that have no diff to render. The fields stay raw: the
 // client renders them with textContent, so a payload with "<script>" or any
 // other HTML cannot create DOM nodes.
+//
+// Status, Result, ResultText, Meta and DurationMs are populated when the
+// matching tool_result row lands — see attachToolResult. A pending tool_use
+// (no result yet) keeps Status empty; the client renders the step with a
+// spinner glyph while that is true.
 type ToolCall struct {
 	Name        string     `json:"name"`                   // "Bash", "Edit", ...
 	Args        string     `json:"args"`                   // one-line summary of the tool input
@@ -149,6 +154,11 @@ type ToolCall struct {
 	Command     string     `json:"command,omitempty"`      // Bash command, verbatim
 	DiffPreview []DiffLine `json:"diff_preview,omitempty"` // first few − / + lines (for the sheet's collapsed preview)
 	DiffFull    []DiffLine `json:"diff_full,omitempty"`    // full synthesized diff (Edit/Write/MultiEdit)
+	Status      string     `json:"status,omitempty"`       // "ok" | "err" | "" for pending
+	Result      string     `json:"result,omitempty"`       // one-line head of the tool_result body
+	ResultText  string     `json:"result_text,omitempty"`  // full tool_result body (trimmed to toolResultTextCap)
+	Meta        string     `json:"meta,omitempty"`         // +N −M, N lines, …
+	DurationMs  int64      `json:"duration_ms,omitempty"`  // ts(tool_result) − ts(tool_use)
 }
 
 // DiffLine: one row of a synthesized diff. Kind is "ctx" | "del" | "add";
@@ -342,6 +352,14 @@ func ReadConversationBefore(sid string, before Cursor, max int64) ([]Turn, Curso
 }
 
 // parseLines folds newline-terminated JSONL into the turns the UI renders.
+//
+// A pure tool_result-only user row no longer becomes its own Turn. Instead we
+// pull its data out via parseToolResultRow and patch it into the preceding
+// assistant Turn in this batch that owns a tool_use with no Status yet. When
+// no match is found in this batch — the tool_use landed in an earlier batch
+// (SSE delta boundary) — we emit an "orphan" Turn carrying just the
+// tool_result fields; the client reconciles it into the last pending step
+// already on screen without rendering a sibling.
 func parseLines(b []byte) []Turn {
 	var turns []Turn
 	for _, line := range splitLines(b) {
@@ -349,11 +367,225 @@ func parseLines(b []byte) []Turn {
 		if len(line) == 0 {
 			continue
 		}
+		if r, ok := parseToolResultRow(line); ok {
+			if !attachToolResult(turns, r) {
+				turns = append(turns, orphanToolResultTurn(r))
+			}
+			continue
+		}
 		if t, ok := parseTurn(line); ok {
 			turns = append(turns, t)
 		}
 	}
 	return turns
+}
+
+// toolResultTextCap bounds the full result body we carry on the ToolCall. The
+// client only reveals the body on a tap; 8 KB keeps the payload small while
+// covering a typical Read/Grep output.
+const toolResultTextCap = 8 << 10
+
+// toolResultRow is the extracted payload of a tool_result-only user row.
+type toolResultRow struct {
+	ts       time.Time
+	head     string          // one-line summary of the body
+	fullText string          // full body, trimmed to toolResultTextCap
+	isError  bool
+	rawBody  json.RawMessage // first tool_result block's raw content (for extractToolMeta)
+}
+
+// parseToolResultRow returns the tool_result payload for a user row whose
+// structured content is nothing but tool_result blocks. Rows that mix text
+// and tool_result keep their old behaviour (they come out as user turns via
+// parseTurn) and this function returns ok=false for them.
+func parseToolResultRow(line []byte) (toolResultRow, bool) {
+	var e jsonlEntry
+	if err := json.Unmarshal(line, &e); err != nil {
+		return toolResultRow{}, false
+	}
+	if e.Type != "user" {
+		return toolResultRow{}, false
+	}
+	var m msgEnvelope
+	if err := json.Unmarshal(e.Message, &m); err != nil {
+		return toolResultRow{}, false
+	}
+	if m.Role != "user" || len(m.Content) == 0 || m.Content[0] == '"' {
+		return toolResultRow{}, false
+	}
+	var blocks []contentBlock
+	if err := json.Unmarshal(m.Content, &blocks); err != nil {
+		return toolResultRow{}, false
+	}
+	r := toolResultRow{ts: parseTS(e.Timestamp)}
+	for _, b := range blocks {
+		switch b.Type {
+		case "tool_result":
+			if b.IsError {
+				r.isError = true
+			}
+			if r.rawBody == nil && len(b.Content) > 0 {
+				r.rawBody = append(r.rawBody, b.Content...)
+			}
+			if s := summarizeToolResult(b.Content); s != "" {
+				if r.head != "" {
+					r.head += "\n"
+				}
+				r.head += s
+			}
+			if s := fullToolResultText(b.Content); s != "" {
+				if r.fullText != "" {
+					r.fullText += "\n"
+				}
+				r.fullText += s
+			}
+		default:
+			// Any non-tool_result block (notably text) means this is a mixed
+			// row — let parseTurn handle it the old way.
+			return toolResultRow{}, false
+		}
+	}
+	if r.rawBody == nil && r.head == "" && r.fullText == "" && !r.isError {
+		return toolResultRow{}, false
+	}
+	return r, true
+}
+
+// attachToolResult walks turns from the tail for the first assistant turn
+// carrying a tool_use with no Status yet and populates the result fields on
+// it. Returns true when a match was found; false when the tool_use is not in
+// this batch and the caller must emit an orphan row instead.
+func attachToolResult(turns []Turn, r toolResultRow) bool {
+	for i := len(turns) - 1; i >= 0; i-- {
+		t := &turns[i]
+		if t.Tool == nil || t.Tool.Status != "" {
+			continue
+		}
+		applyToolResult(t.Tool, r, t.Ts)
+		return true
+	}
+	return false
+}
+
+// applyToolResult writes the result fields onto a ToolCall in place.
+// callTs is the timestamp of the matching tool_use row — used to derive
+// DurationMs. It may be zero for a tool_use whose row had no timestamp.
+func applyToolResult(tc *ToolCall, r toolResultRow, callTs time.Time) {
+	if r.isError {
+		tc.Status = "err"
+	} else {
+		tc.Status = "ok"
+	}
+	tc.Result = r.head
+	tc.ResultText = r.fullText
+	if !callTs.IsZero() && !r.ts.IsZero() {
+		d := r.ts.Sub(callTs).Milliseconds()
+		if d < 0 {
+			d = 0
+		}
+		tc.DurationMs = d
+	}
+	if tc.Status == "ok" {
+		tc.Meta = extractToolMeta(tc, r.rawBody, r.fullText)
+	}
+}
+
+// orphanToolResultTurn builds the carrier Turn the server emits when a
+// tool_result arrives in a batch whose matching tool_use already shipped in
+// an earlier delta. The client recognises Role="tool_result" + Tool filled,
+// does not render it as a sibling, and patches the result onto the last
+// pending step in its DOM.
+func orphanToolResultTurn(r toolResultRow) Turn {
+	tc := &ToolCall{}
+	applyToolResult(tc, r, time.Time{})
+	return Turn{Role: "tool_result", Ts: r.ts, Text: r.head, Tool: tc}
+}
+
+// extractToolMeta derives the right-hand meta label from a successful
+// tool_result. Edit/Write read the add/del counts off the already-synthesized
+// diff (the call's input is the source of truth for what changed, and the
+// result body does not reliably carry a +N −M header). Read/Grep count the
+// newlines in the body. Everything else returns empty — the client falls
+// back to the step's elapsed time.
+func extractToolMeta(tc *ToolCall, rawBody json.RawMessage, fullText string) string {
+	switch tc.Name {
+	case "Edit", "Write", "MultiEdit":
+		added, removed := 0, 0
+		for _, d := range tc.DiffFull {
+			switch d.Kind {
+			case "add":
+				added++
+			case "del":
+				removed++
+			}
+		}
+		if added == 0 && removed == 0 {
+			return ""
+		}
+		return fmt.Sprintf("+%d −%d", added, removed)
+	case "Read", "Grep":
+		n := countLines(fullText)
+		if n == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%d lines", n)
+	}
+	return ""
+}
+
+// countLines returns the number of lines in s. A body with no trailing
+// newline still counts its final line.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
+}
+
+// fullToolResultText dumps the whole tool_result body (bounded to
+// toolResultTextCap) so the client can expand the nested step output with
+// "Show all N lines". Shares its block-walking shape with summarizeToolResult
+// but keeps every line instead of collapsing to one.
+func fullToolResultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return ""
+		}
+		return capBody(s)
+	}
+	var blocks []contentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	var buf strings.Builder
+	for _, b := range blocks {
+		if b.Type != "text" || b.Text == "" {
+			continue
+		}
+		if buf.Len() > 0 {
+			buf.WriteByte('\n')
+		}
+		buf.WriteString(b.Text)
+		if buf.Len() >= toolResultTextCap {
+			break
+		}
+	}
+	return capBody(buf.String())
+}
+
+func capBody(s string) string {
+	if len(s) <= toolResultTextCap {
+		return s
+	}
+	return s[:toolResultTextCap] + "\n…[truncated]"
 }
 
 // transcriptSize: the current size of sid's transcript.
@@ -450,8 +682,6 @@ func parseTurn(line []byte) (Turn, bool) {
 	}
 	var text strings.Builder
 	var tool *ToolCall
-	var toolResult string
-	var toolErrored bool
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
@@ -463,15 +693,8 @@ func parseTurn(line []byte) (Turn, bool) {
 			}
 		case "tool_use":
 			tool = buildToolCall(b.Name, b.Input)
-		case "tool_result":
-			toolErrored = toolErrored || b.IsError
-			if s := summarizeToolResult(b.Content); s != "" {
-				if toolResult != "" {
-					toolResult += "\n"
-				}
-				toolResult += s
-			}
-			// Keep walking: a tool_result row may also carry a trailing text block.
+			// tool_result blocks on a user row are claimed upstream by
+			// parseLines → parseToolResultRow before parseTurn ever sees them.
 		}
 	}
 	switch m.Role {
@@ -497,17 +720,8 @@ func parseTurn(line []byte) (Turn, bool) {
 			cleaned, pasted := unwrapPastedBlocks(s)
 			return Turn{Role: "user", Ts: ts, Text: cleaned, Pasted: pasted}, true
 		}
-		// Nothing but tool_result blocks. Render only when it errored OR carried
-		// a short result — the common success case is already implied by the
-		// preceding tool_use row.
-		if toolErrored || toolResult != "" {
-			role := "tool_result"
-			head := toolResult
-			if toolErrored {
-				head = "[error] " + head
-			}
-			return Turn{Role: role, Ts: ts, Text: head}, true
-		}
+		// Pure tool_result rows are claimed by parseLines before they ever
+		// reach parseTurn, so a user row with no text has nothing left to say.
 		return Turn{}, false
 	}
 	return Turn{}, false
