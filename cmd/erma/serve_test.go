@@ -487,6 +487,26 @@ func TestShutdownWithOpenStream(t *testing.T) {
 	}
 }
 
+// The conversation header and empty state embed the pane's working directory
+// in a mono "~/…"-abbreviated form; the abbreviation happens in toAPI so the
+// client never has to know the running user's $HOME.
+func TestHomeAbbrev(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	for _, c := range []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"/home/me", "~"},
+		{"/home/me/code/acme-api", "~/code/acme-api"},
+		{"/var/log", "/var/log"},
+		{"/home/alice/x", "/home/alice/x"},
+	} {
+		if got := homeAbbrev(c.in); got != c.want {
+			t.Errorf("homeAbbrev(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // A subscriber that falls behind gets the newest snapshot, not a stale one and
 // not nothing: a pending frame is replaced rather than dropped.
 func TestSSEHubSlowSubscriberGetsLatest(t *testing.T) {

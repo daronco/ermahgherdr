@@ -102,6 +102,61 @@ body {
 }
 .topbar .live-dot.on { background: var(--accent); }
 
+/* Conversation topbar: back · title block (name + mono dir) · state pill · ⋮.
+   The connection dot rides along as a compact indicator; the design mocks
+   don't surface it on screen but it's still the only sign SSE is alive. */
+.conv-topbar { align-items: flex-start; gap: 12px; padding: 10px 14px 10px 10px; }
+.conv-topbar .back {
+  color: var(--text); text-decoration: none; font-size: 20px;
+  padding: 6px 8px; line-height: 1;
+  min-width: 40px; min-height: 40px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.conv-title-block {
+  display: flex; flex-direction: column; min-width: 0;
+  flex: 1; align-self: center;
+}
+.conv-title-block .title {
+  color: var(--text);
+  font-size: 17px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.conv-dir {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.conv-pill {
+  align-self: center;
+  padding: 4px 12px; min-height: 28px;
+  font-size: 12px; font-weight: 700;
+}
+.conv-pill.pill-proc   { background: var(--work-bg); color: var(--work); }
+.conv-pill.pill-urgent { background: var(--you);     color: var(--on-you); }
+.conv-pill.pill-done   { background: var(--done-bg); color: var(--done); }
+.conv-pill.pill-idle   { background: var(--surface); color: var(--text-2); }
+.conv-pill.pill-paused { background: var(--surface); color: var(--text-2); }
+.conv-conn {
+  align-self: center;
+  color: var(--text-3); font-size: 12px;
+  min-width: 10px; text-align: center;
+}
+.conv-conn.live { color: var(--accent); }
+.conv-conn.lost { color: var(--err); }
+.conv-menu {
+  background: transparent; color: var(--text-2);
+  border: 0; padding: 4px 8px;
+  font-size: 22px; line-height: 1;
+  min-width: 36px; min-height: 36px;
+  cursor: pointer;
+  align-self: center;
+}
+.conv-menu:active { color: var(--text); }
+.conv-menu:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
 main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 
 /* ------------------------------------------------------------------
@@ -259,6 +314,46 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 }
 
 .conv-main { max-width: 760px; margin: 0 auto; padding: 12px 16px; }
+
+/* Empty conversation (ux-redesign/png/07.png): a large >_ glyph, title, and a
+   sub-line that embeds the session's working directory inline in mono. Text
+   content is centred vertically within the transcript area. */
+.conv-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  margin: 72px auto 24px;
+  padding: 24px 24px 0;
+  text-align: center;
+  color: var(--text-2);
+  max-width: 420px;
+}
+.conv-empty-glyph {
+  font-family: var(--mono);
+  font-size: 44px;
+  color: var(--text-3);
+  letter-spacing: -2px;
+  line-height: 1;
+}
+.conv-empty-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px; font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.conv-empty-sub {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px; line-height: 1.5;
+  max-width: 320px;
+}
+.conv-empty-dir {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--raised);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
 
 /* ------------------------------------------------------------------
    Permission / question sheet (telas/04.html).
@@ -659,7 +754,9 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; gap: 8px;
 }
-.qkbar { display: flex; gap: 6px; flex-wrap: wrap; }
+/* .qk is the shared base for permission-banner choice buttons (Allow / Deny /
+   Esc). The ^C quick-key bar that used to live in the composer is gone; only
+   the perm-choice flavour survives. */
 .qk {
   background: var(--raised); color: var(--text); border: 1px solid var(--line);
   padding: 8px 12px; border-radius: var(--r-sm); font: inherit; font-weight: 600;
@@ -667,85 +764,131 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   cursor: pointer;
 }
 .qk:active { filter: brightness(1.15); }
-.qk.danger { color: var(--err); border-color: var(--err-line); }
 
-.replybox { display: flex; align-items: flex-end; gap: 6px; }
+/* Composer: one rounded textarea pill + one round action button (mic ↔ send).
+   Design (png/05.png / png/07.png): the field sits on --surface at 44 px high
+   with the "Message Claude…" placeholder, the button is 44 px round on the
+   right. The swap is driven by .composer--empty, toggled by conversation.js. */
+.replybox {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 6px 4px 18px;
+}
 .replybox textarea {
-  flex: 1; min-height: 44px; max-height: 180px;
-  background: var(--sunk); color: var(--text); border: 1px solid var(--line);
-  border-radius: var(--r-sm); padding: 10px; font: inherit; resize: vertical;
+  flex: 1; min-height: 36px; max-height: 180px;
+  background: transparent; color: var(--text); border: 0;
+  padding: 10px 0; font: inherit;
+  resize: none;
+  outline: none;
+  line-height: 1.4;
 }
-.replybtns { display: flex; gap: 6px; }
-.send, .voice {
-  background: var(--accent); color: var(--on-accent); border: 0; border-radius: var(--r-sm);
-  padding: 10px 16px; font-weight: 700; cursor: pointer;
-  min-height: 44px; min-width: 44px;
+.replybox textarea::placeholder { color: var(--text-3); }
+.replybtns { display: flex; align-items: center; gap: 6px; }
+.replybox .round {
+  width: 40px; height: 40px;
+  border: 0;
+  font-size: 15px;
+  background: var(--raised); color: var(--text);
 }
-.send:disabled { opacity: 0.6; cursor: not-allowed; }
-.voice { background: var(--raised); color: var(--text); }
-.voice.listening { background: var(--you); color: var(--on-you); }
+.replybox .round.send {
+  background: var(--accent); color: var(--on-accent);
+}
+.replybox .round.send:disabled { opacity: 0.6; cursor: not-allowed; }
+.replybox .round.voice.listening { background: var(--you); color: var(--on-you); }
+
+/* composer--empty: mic wins the slot (when available), send is hidden.
+   With text: send wins the slot, mic is hidden. Both nodes stay in the DOM so
+   their JS wiring (speech recognition / POST /text) is untouched. */
+.composer--empty .replybox .round.send { display: none; }
+.composer:not(.composer--empty) .replybox .round.voice { display: none; }
 
 /* Prominent whole-page urgent tint when the banner is up. */
 body.state-urgent .topbar { background: linear-gradient(var(--you-bg), var(--you-bg)), var(--sunk); }
 
 /* Live status strip pinned above the composer. The bottom offset is kept in
    sync with the composer's measured height from conversation.js, so a growing
-   send-warn / replybox doesn't cover the strip. */
+   send-warn / replybox doesn't cover the strip.
+   Design layout (ux-redesign/png/05.png, 08.png, 10.png): the state word in
+   its state colour, a detail segment, elapsed on the right in mono, and a
+   Stop button on the far right while the pane is `proc`. A 2 px coloured top
+   border highlights `proc` and `urgent`; `done`, `idle`, `paused` keep the
+   neutral --line border. */
 .status-strip {
   position: fixed; left: 0; right: 0;
   bottom: 128px; z-index: 2;
   display: flex; align-items: center; gap: 10px;
-  padding: 6px 16px;
+  padding: 10px 16px;
   background: var(--sunk);
-  border-top: 1px solid var(--line);
+  border-top: 2px solid var(--line);
   border-bottom: 1px solid var(--line);
-  color: var(--text-2); font-size: 12px;
+  color: var(--text-2); font-size: 13px;
 }
 .strip-state {
-  font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  font-weight: 700;
   color: var(--text-2);
+  text-transform: none; letter-spacing: 0;
 }
-.strip-tool {
-  color: var(--you);
-  font-family: var(--mono);
+.strip-detail {
+  color: var(--text-2);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   min-width: 0; flex: 1;
 }
-.strip-tool:empty { display: none; }
+.strip-detail:empty { display: none; }
 .strip-elapsed {
   margin-left: auto;
+  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   color: var(--text-3);
+}
+.strip-stop {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--raised); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--r-btn);
+  padding: 6px 14px; min-height: 36px;
+  font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer;
+}
+.strip-stop:active { filter: brightness(1.15); }
+.strip-stop .strip-stop-glyph {
+  font-size: 10px; line-height: 1; color: var(--text-2);
 }
 
 body.state-proc   .status-strip { border-top-color: var(--work); }
 body.state-proc   .strip-state  { color: var(--work); }
-body.state-urgent .status-strip { border-top-color: var(--you); background: linear-gradient(var(--you-bg), var(--you-bg)), var(--sunk); }
+body.state-urgent .status-strip { border-top-color: var(--you); }
 body.state-urgent .strip-state  { color: var(--you); }
-body.state-done   .status-strip { border-top-color: var(--done); }
+body.state-done   .status-strip { border-top-color: var(--line); }
 body.state-done   .strip-state  { color: var(--done); }
 body.state-idle   .status-strip { border-top-color: var(--line); }
 body.state-idle   .strip-state  { color: var(--text-3); }
+body.state-paused .status-strip { border-top-color: var(--line); }
+body.state-paused .strip-state  { color: var(--text-3); }
 
-/* Urgent composes the strip as `Needs you · <reason> · <elapsed>` — drop the
-   right-anchor on elapsed and paint `·` separators between the three parts. */
-body.state-urgent .strip-elapsed { margin-left: 0; }
-body.state-urgent .strip-tool::before,
-body.state-urgent .strip-elapsed::before {
-  content: '· ';
-  color: var(--text-3);
-}
 
-/* Pending echo: the user's turn is on screen before the server has acked it. */
-.turn-pending {
-  opacity: 0.65;
-  border-left-color: var(--text-3);
-}
-.turn-pending .turn-ts::after {
-  content: ' · sending…';
+/* Pending echo: the user's turn is on screen before the server has acked it.
+   Design (png/05.png) keeps the bubble at full opacity and surfaces the
+   sending signal as a meta row under it; reconcilePendingEcho strips the
+   whole <li> once the server echo arrives, so the row vanishes in one step. */
+.turn-pending { border-left-color: var(--text-3); }
+.turn-meta {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 6px;
   color: var(--text-3);
-  font-style: italic;
+  font-size: 12px;
 }
+.turn-sending { color: var(--text-3); }
+.turn-sending-label { font-style: italic; }
+.spinner {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 1.5px solid var(--text-3);
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: erma-spin 0.9s linear infinite;
+}
+@keyframes erma-spin { to { transform: rotate(360deg); } }
 .turn-failed {
   opacity: 0.95;
   border-left-color: var(--err);
@@ -759,25 +902,35 @@ body.state-urgent .strip-elapsed::before {
 
 /* ------------------------------------------------------------------
    Tab strip + Terminal tab (session view)
+   Segmented pill (ux-redesign/png/05.png): the whole bar sits on --sunk,
+   each tab stretches equally, the active tab fills with --surface and gets
+   an --accent underline. Inactive tabs remain transparent with muted text.
    ------------------------------------------------------------------ */
 .tabs {
   position: sticky; top: var(--topbar-h, 44px); z-index: 4;
-  display: flex; gap: 0;
+  display: flex; gap: 8px;
   background: var(--sunk);
   background-clip: padding-box;
   border-bottom: 1px solid var(--line);
-  padding: 0 16px;
+  padding: 8px 16px;
 }
 .conv-page .tab-panel { position: relative; z-index: 0; }
 .tabs .tab {
+  flex: 1;
   background: transparent; color: var(--text-2);
-  border: 0; border-bottom: 2px solid transparent;
-  padding: 12px 14px; font: inherit; font-weight: 600;
+  border: 0; border-radius: var(--r-md);
+  padding: 10px 14px; font: inherit; font-weight: 700;
   min-height: 44px;
   cursor: pointer;
   letter-spacing: 0.3px;
+  text-align: center;
+  position: relative;
 }
-.tabs .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tabs .tab.active {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
 .tabs .tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 
