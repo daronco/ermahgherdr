@@ -562,7 +562,6 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 }
 .turn-user      { border-left-color: var(--accent); }
 .turn-assistant { border-left-color: var(--done); background: var(--done-bg); }
-.turn-tool_result { border-left-color: var(--work); }
 
 /* A system turn is a compact grey chip: one-line summary visible, full body
    collapsed inside a <details> that expands on tap. No role chip or timestamp
@@ -608,38 +607,137 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
   overflow: auto;
 }
 
-/* A folded tool-call group: compact chip summary, step list revealed on tap. */
-.turn-tools { border-left-color: var(--you); padding: 4px 10px; }
+/* A step-group card: header + nested step rows that each carry their own
+   tool_result inline. Design (ux-redesign/png/08.png, png/05.png): a --surface
+   card with --r-md corners; the summary stays tappable (list-style:none so
+   the native marker is replaced by a lightweight chevron ::before). */
+.turn-tools {
+  background: var(--surface);
+  border-left: 0;
+  border-radius: var(--r-md);
+  padding: 8px 12px;
+}
 .turn-tools .tools-group > summary {
   cursor: pointer;
   list-style: none;
-  color: var(--you);
+  color: var(--text-2);
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.1px;
+  padding: 2px 0;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .turn-tools .tools-group > summary::-webkit-details-marker { display: none; }
 .turn-tools .tools-group > summary::before {
-  content: '▸ ';
+  content: '▸';
   color: var(--text-3);
   display: inline-block;
   width: 1em;
+  flex: none;
 }
-.turn-tools details[open] > summary::before { content: '▾ '; }
+.turn-tools details[open] > summary::before { content: '▾'; }
+/* The group header carries the failure count in --you so a failed step in a
+   long group is visible at a glance even when the card is collapsed. */
+.turn-tools .tools-group.has-failed > summary { color: var(--you); }
+
+/* Step rows: hairline-separated list of individual tool_use + its inline
+   tool_result. */
 .turn-tools .tool-steps {
   list-style: none;
   padding: 6px 0 0;
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
 .turn-tools .tool-step {
+  padding: 6px 0;
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+}
+.turn-tools .tool-step:first-child { border-top: 0; }
+
+.turn-tools .step-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 2px 0;
   min-width: 0;
 }
+
+/* Status icon: ✓ for success in --done, hollow circle in --you for failed,
+   an animated --work ring for a pending step. */
+.step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px; height: 14px;
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
+}
+.step-icon--ok { color: var(--done); }
+.step-icon--ok::before { content: '✓'; font-weight: 700; }
+.step-icon--err { color: var(--you); }
+.step-icon--err::before {
+  content: '';
+  width: 10px; height: 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1.5px var(--you);
+}
+.step-icon--spin {
+  width: 12px; height: 12px;
+  border: 1.5px solid var(--work);
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: erma-spin 0.9s linear infinite;
+}
+
+/* Right-aligned meta slot: +N −M, N lines, elapsed. Mono so numbers align
+   vertically across stacked rows. */
+.step-meta {
+  margin-left: auto;
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  flex: none;
+}
+.step-meta:empty { display: none; }
+
+/* Nested step output: first N lines visible, Show-all button when truncated. */
+.step-output {
+  margin: 6px 0 2px 22px; /* indent under the status icon */
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.step-output-body {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-2);
+  max-height: 40vh;
+  overflow: auto;
+}
+.step-more {
+  background: transparent;
+  color: var(--accent);
+  border: 0;
+  padding: 4px 0;
+  margin-top: 4px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.step-more:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 
 .turn-head {
   display: flex; justify-content: space-between; align-items: baseline;
@@ -649,15 +747,13 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .turn-role { font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 12px; }
 .turn-user .turn-role      { color: var(--accent); }
 .turn-assistant .turn-role { color: var(--done); }
-.turn-tool_result .turn-role { color: var(--work); }
 
 .turn-body { color: var(--text); word-wrap: break-word; font-size: 15px; line-height: 1.55; }
 /* Assistant turns go through the Markdown renderer and emit real block nodes,
    so .turn-body itself no longer forces pre-wrap — paragraphs and <br> carry
-   the whitespace. User and tool_result turns use textContent and would lose
-   their newlines without an override, so they keep pre-wrap below. */
-.turn-user .turn-body,
-.turn-tool_result .turn-body { white-space: pre-wrap; }
+   the whitespace. User turns use textContent and would lose their newlines
+   without an override, so they keep pre-wrap below. */
+.turn-user .turn-body { white-space: pre-wrap; }
 
 .turn-body p { margin: 0 0 8px; }
 .turn-body p:last-child { margin-bottom: 0; }
@@ -673,12 +769,17 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .turn-body strong { font-weight: 700; }
 .turn-body em { font-style: italic; }
 .turn-body a { color: var(--accent); text-decoration: underline; word-break: break-all; }
+/* Inline code: pill-shaped chip on a --surface tint. The pre > code override
+   below strips the pill back to a flat glyph inside fenced blocks so a long
+   line still scrolls inside the <pre> instead of ballooning the chip. */
 .turn-body code {
   font-family: var(--mono);
   font-size: 0.92em;
-  background: var(--raised);
-  padding: 1px 4px;
-  border-radius: 3px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
 }
 /* Fenced code blocks and tables SHALL scroll inside their own box without
    producing page-level horizontal scroll at a 390px viewport. */
@@ -695,9 +796,11 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .turn-body pre code {
   font-family: var(--mono);
   background: transparent;
+  color: inherit;
   padding: 0;
   border-radius: 0;
   font-size: 0.92em;
+  white-space: pre;
 }
 .turn-body .md-table-wrap {
   display: block;
@@ -714,8 +817,15 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 .turn-body td {
   padding: 4px 8px;
   border: 1px solid var(--line);
-  white-space: nowrap;
+  /* Cells wrap so a wide Markdown table doesn't push the page sideways at
+     390 CSS px (ux-redesign/png/09.png). The .md-table-wrap scroll-in-box
+     is kept as a safety net for truly huge tables. */
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   text-align: left;
+  vertical-align: top;
+  max-width: 180px;
 }
 .turn-body th { background: var(--raised); font-weight: 600; }
 
@@ -1304,6 +1414,46 @@ body.offline .strip-tool { color: var(--text-3); font-family: var(--sans); }
   background: var(--surface); color: var(--text-2);
   font-size: 13px;
 }
+.syschip-icon {
+  display: inline-flex;
+  width: 16px; height: 16px;
+  align-items: center; justify-content: center;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1;
+  flex: none;
+}
+.syschip-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+
+/* Floating "Latest ↓" button: pinned above the status strip, bottom-anchored
+   with the same ResizeObserver offset wireStripOffset writes for the perm
+   sheet. --raised background, --accent label + glyph, 44px min height. */
+.latest-btn {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--composer-h, 0px) + var(--status-strip-h, 0px) + 12px + env(safe-area-inset-bottom));
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--raised);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  padding: 0 16px;
+  min-height: 44px;
+  font: inherit;
+  font-size: 13px; font-weight: 700;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  z-index: 4;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+.latest-btn[hidden] { display: none !important; }
+.latest-btn:active { filter: brightness(1.1); }
+.latest-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.latest-btn .latest-btn-glyph { font-size: 14px; line-height: 1; }
 
 /* Numbered choice — --raised background, 48 px min height, with a .k key cap
    for the CLI number. .primary fills with --accent / --on-accent. */
