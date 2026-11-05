@@ -807,6 +807,202 @@ func TestParseTurnPlainUserUnchanged(t *testing.T) {
 }
 
 // A header row longer than the fast-path budget must not hide the cwd behind it.
+// buildToolCall populates the structured preview fields the permission sheet
+// needs — file_path and a synthesized diff for Edit/Write/MultiEdit, the raw
+// command for Bash. Args stays as the one-line summary so the tool-fold row
+// keeps working on the main transcript.
+func TestBuildToolCallEdit(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"file_path":  "/repo/layouts/rss.xml",
+		"old_string": "<pubDate>old</pubDate>",
+		"new_string": "<pubDate>new</pubDate>\n<atom:updated>now</atom:updated>",
+	})
+	tc := buildToolCall("Edit", raw)
+	if tc.Name != "Edit" {
+		t.Errorf("Name: got %q", tc.Name)
+	}
+	if tc.FilePath != "/repo/layouts/rss.xml" {
+		t.Errorf("FilePath: got %q", tc.FilePath)
+	}
+	if tc.Command != "" {
+		t.Errorf("Command should be empty for Edit, got %q", tc.Command)
+	}
+	wantFull := []DiffLine{
+		{Kind: "del", Text: "<pubDate>old</pubDate>"},
+		{Kind: "add", Text: "<pubDate>new</pubDate>"},
+		{Kind: "add", Text: "<atom:updated>now</atom:updated>"},
+	}
+	if len(tc.DiffFull) != len(wantFull) {
+		t.Fatalf("DiffFull: got %d lines, want %d: %+v", len(tc.DiffFull), len(wantFull), tc.DiffFull)
+	}
+	for i, w := range wantFull {
+		if tc.DiffFull[i] != w {
+			t.Errorf("DiffFull[%d]: got %+v, want %+v", i, tc.DiffFull[i], w)
+		}
+	}
+	// The preview is a copy of the first lines (<= cap), not an alias.
+	if len(tc.DiffPreview) != len(wantFull) {
+		t.Errorf("DiffPreview should hold every line when under the cap; got %d", len(tc.DiffPreview))
+	}
+}
+
+func TestBuildToolCallWrite(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"file_path": "/repo/README.md",
+		"content":   "# title\nbody line",
+	})
+	tc := buildToolCall("Write", raw)
+	if tc.FilePath != "/repo/README.md" {
+		t.Errorf("FilePath: got %q", tc.FilePath)
+	}
+	want := []DiffLine{
+		{Kind: "add", Text: "# title"},
+		{Kind: "add", Text: "body line"},
+	}
+	if len(tc.DiffFull) != len(want) {
+		t.Fatalf("DiffFull: got %+v", tc.DiffFull)
+	}
+	for i, w := range want {
+		if tc.DiffFull[i] != w {
+			t.Errorf("DiffFull[%d]: got %+v, want %+v", i, tc.DiffFull[i], w)
+		}
+	}
+}
+
+func TestBuildToolCallMultiEdit(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"file_path": "/repo/a.go",
+		"edits": []map[string]any{
+			{"old_string": "a", "new_string": "A"},
+			{"old_string": "b", "new_string": "B"},
+		},
+	})
+	tc := buildToolCall("MultiEdit", raw)
+	if tc.FilePath != "/repo/a.go" {
+		t.Errorf("FilePath: got %q", tc.FilePath)
+	}
+	want := []DiffLine{
+		{Kind: "del", Text: "a"},
+		{Kind: "add", Text: "A"},
+		{Kind: "del", Text: "b"},
+		{Kind: "add", Text: "B"},
+	}
+	if len(tc.DiffFull) != len(want) {
+		t.Fatalf("DiffFull: got %+v", tc.DiffFull)
+	}
+	for i, w := range want {
+		if tc.DiffFull[i] != w {
+			t.Errorf("DiffFull[%d]: got %+v, want %+v", i, tc.DiffFull[i], w)
+		}
+	}
+}
+
+// DiffPreview truncates to diffPreviewMaxLines; DiffFull is left whole so the
+// sheet's Full-diff expander has something more to show.
+func TestBuildToolCallDiffPreviewTruncates(t *testing.T) {
+	var sb strings.Builder
+	for i := 0; i < diffPreviewMaxLines*2; i++ {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		fmt.Fprintf(&sb, "line-%02d", i)
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"file_path":  "/repo/big.txt",
+		"old_string": sb.String(),
+		"new_string": "",
+	})
+	tc := buildToolCall("Edit", raw)
+	if len(tc.DiffPreview) != diffPreviewMaxLines {
+		t.Errorf("DiffPreview: got %d lines, want %d", len(tc.DiffPreview), diffPreviewMaxLines)
+	}
+	if len(tc.DiffFull) <= diffPreviewMaxLines {
+		t.Errorf("DiffFull should hold every line (got %d)", len(tc.DiffFull))
+	}
+}
+
+func TestBuildToolCallBash(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"command":     "rm -rf /tmp/foo && echo done",
+		"description": "cleanup",
+	})
+	tc := buildToolCall("Bash", raw)
+	if tc.Command != "rm -rf /tmp/foo && echo done" {
+		t.Errorf("Command: got %q", tc.Command)
+	}
+	if tc.FilePath != "" || len(tc.DiffFull) != 0 || len(tc.DiffPreview) != 0 {
+		t.Errorf("Bash should not populate file/diff fields: %+v", tc)
+	}
+}
+
+// HTML-escaping guarantee: a tool input carrying "<script>" or raw HTML is
+// stored verbatim on the preview fields; the server does no escaping and
+// relies on the client rendering through textContent.
+func TestBuildToolCallPreservesRawPayload(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"file_path":  "/repo/x.html",
+		"old_string": "<script>alert('old')</script>",
+		"new_string": "<img src=x onerror=alert('xss')>",
+	})
+	tc := buildToolCall("Edit", raw)
+	if tc.DiffFull[0].Text != "<script>alert('old')</script>" {
+		t.Errorf("del line: got %q", tc.DiffFull[0].Text)
+	}
+	if tc.DiffFull[1].Text != "<img src=x onerror=alert('xss')>" {
+		t.Errorf("add line: got %q", tc.DiffFull[1].Text)
+	}
+	// Bash payload with HTML characters also survives untouched.
+	rawBash, _ := json.Marshal(map[string]any{
+		"command": `echo "<script>alert(1)</script>"`,
+	})
+	bash := buildToolCall("Bash", rawBash)
+	if bash.Command != `echo "<script>alert(1)</script>"` {
+		t.Errorf("Bash Command altered: %q", bash.Command)
+	}
+}
+
+// A trailing newline in either side must not synthesize a phantom blank line
+// — real diff tools do not render one and the sheet would show a bare "− " /
+// "+ " row that looks like an artifact.
+func TestBuildToolCallEditTrimsTrailingNewline(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{
+		"file_path":  "/repo/a.txt",
+		"old_string": "one\ntwo\n",
+		"new_string": "ONE\nTWO\n",
+	})
+	tc := buildToolCall("Edit", raw)
+	want := []DiffLine{
+		{Kind: "del", Text: "one"},
+		{Kind: "del", Text: "two"},
+		{Kind: "add", Text: "ONE"},
+		{Kind: "add", Text: "TWO"},
+	}
+	if len(tc.DiffFull) != len(want) {
+		t.Fatalf("DiffFull: got %+v, want %+v", tc.DiffFull, want)
+	}
+	for i, w := range want {
+		if tc.DiffFull[i] != w {
+			t.Errorf("DiffFull[%d]: got %+v, want %+v", i, tc.DiffFull[i], w)
+		}
+	}
+}
+
+// Unknown tools get only Name and Args — no file/diff/command fields are
+// inferred. Keeps the ToolCall shape tight and deterministic.
+func TestBuildToolCallUnknownToolLeavesPreviewEmpty(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{"pattern": "foo"})
+	tc := buildToolCall("Grep", raw)
+	if tc.Name != "Grep" {
+		t.Errorf("Name: got %q", tc.Name)
+	}
+	if tc.FilePath != "" || tc.Command != "" || len(tc.DiffFull) != 0 || len(tc.DiffPreview) != 0 {
+		t.Errorf("Grep should leave preview fields empty: %+v", tc)
+	}
+	if tc.Args == "" {
+		t.Errorf("Args should still be populated: %+v", tc)
+	}
+}
+
 func TestTranscriptCwdsPastLongHeader(t *testing.T) {
 	header := `{"type":"last-prompt","lastPrompt":"` + strings.Repeat("x", transcriptCwdScanBytes) + `"}`
 	writeTranscript(t, []string{header, `{"type":"user","cwd":"/work/repo"}`})

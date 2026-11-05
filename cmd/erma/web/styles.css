@@ -76,7 +76,7 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* Classes that set `display` (.sheet is flex) beat the UA's [hidden] rule, so
+/* Classes that set `display` (the new-session sheet is flex) beat the UA's [hidden] rule, so
    the attribute alone never hid them; the new-session sheet could not close. */
 [hidden] { display: none !important; }
 
@@ -260,24 +260,172 @@ main { padding: 8px 16px 24px; max-width: 760px; margin: 0 auto; }
 
 .conv-main { max-width: 760px; margin: 0 auto; padding: 12px 16px; }
 
-/* Sticky offsets come from the real topbar/tab heights (set by conversation.js):
-   fixed pixels hid the banner under the tabs, worse with a safe-area inset. */
-.perm-banner {
-  position: sticky; top: var(--sticky-under-tabs, 86px); z-index: 2;
-  max-height: 45vh; overflow-y: auto;
-  margin: 8px 16px; padding: 12px;
-  /* Sticky over the transcript: the tint needs an opaque base under it. */
-  background: linear-gradient(var(--you-bg), var(--you-bg)), var(--bg); border-left: 4px solid var(--you);
-  border-radius: var(--r-sm);
+/* ------------------------------------------------------------------
+   Permission / question sheet (telas/04.html).
+   Bottom-anchored sheet above the composer and status strip. The strip sits
+   on top (--status-strip-h pinned against it by .perm-sheet's bottom offset)
+   so the status always stays visible, including when the mobile keyboard is
+   up. Content scrolls inside the sheet's body, never under the strip. */
+.perm-sheet {
+  position: fixed; left: 0; right: 0;
+  /* Stacks above the composer AND above the status strip so chevron / choices
+     stay tappable. The strip stays visible by sitting above the sheet's top
+     edge via its own bottom offset: the sheet caps its max-height so the
+     strip can never be covered. */
+  z-index: 6;
+  /* Fallbacks are 0px: on first paint (before syncStripOffset writes the real
+     heights) the sheet lands at the bottom of the viewport. A brief flash at
+     the floor is less jarring than a confident-but-wrong offset would be. */
+  bottom: calc(var(--composer-h, 0px) + var(--status-strip-h, 0px) + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column;
+  max-height: 60vh;
+  background: var(--surface);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: 0 -1px 0 var(--you), 0 -12px 32px rgba(0, 0, 0, 0.5);
+  padding: 6px 16px 16px;
+  /* Classes that set display (flex) beat the UA hidden rule; keep this gated. */
+}
+.perm-sheet[hidden] { display: none !important; }
+
+.perm-sheet .sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  min-height: 32px;
+  flex: none;
+}
+.perm-sheet .sheet-label {
+  color: var(--you);
+  font-size: 12px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.perm-sheet .sheet-chevron {
+  background: transparent; border: 0;
+  color: var(--text-2);
+  width: 36px; height: 36px; min-width: 36px; min-height: 36px;
+  display: grid; place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.perm-sheet .sheet-chevron::before {
+  content: '▾';
+  font-size: 18px; line-height: 1;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.perm-sheet.collapsed .sheet-chevron::before { transform: rotate(180deg); }
+.perm-sheet.collapsed .sheet-body { display: none; }
+
+.perm-sheet .sheet-body {
+  display: flex; flex-direction: column; gap: 12px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-top: 4px;
+}
+/* Title sits at the sheet root (sibling of sheet-body), so it stays visible
+   when the sheet is collapsed — only the preview and the choices hide. */
+.perm-sheet .sheet-title {
+  margin: 4px 0 8px;
+  font-size: 16px; font-weight: 600; line-height: 1.35;
   color: var(--text);
+  flex: none;
 }
-.perm-head {
-  font-weight: 600; color: var(--you);
-  font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+.perm-sheet.collapsed .sheet-title { margin-bottom: 4px; }
+
+.perm-sheet .sheet-preview:empty { display: none; }
+
+.perm-sheet .sheet-cmd {
+  background: var(--sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  overflow: hidden;
 }
-.perm-body { margin-top: 4px; color: var(--text); white-space: pre-wrap; }
-.perm-choices { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-.perm-choice { text-align: left; max-width: 100%; white-space: normal; }
+.perm-sheet .sheet-cmd-body {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.perm-sheet .sheet-diff {
+  background: var(--sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.perm-sheet .sheet-diff-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+.perm-sheet .sheet-diff-path {
+  font-family: var(--mono);
+  color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 1;
+}
+.perm-sheet .sheet-diff-toggle {
+  background: transparent; border: 0;
+  color: var(--accent);
+  font: inherit; font-weight: 600;
+  cursor: pointer;
+  padding: 4px 6px;
+  min-height: 32px;
+}
+.perm-sheet .sheet-diff-body { padding: 4px 0; }
+.perm-sheet .sheet-diff-line {
+  padding: 0 10px;
+  white-space: pre;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.perm-sheet .sheet-diff-del {
+  color: var(--text-3);
+  background: #141414;
+  text-decoration: line-through;
+  text-decoration-color: rgba(138, 150, 150, 0.5);
+}
+.perm-sheet .sheet-diff-add {
+  color: var(--text);
+  background: #2a3030;
+}
+.perm-sheet .sheet-diff-ctx { color: var(--text-2); }
+.perm-sheet .sheet-diff-ellipsis {
+  color: var(--text-3);
+  background: transparent;
+  text-align: center;
+}
+
+.perm-sheet .sheet-choices {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.perm-sheet .choice {
+  justify-content: flex-start;
+  min-height: 48px;
+}
+.perm-sheet .choice .choice-label {
+  overflow: hidden; text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+/* While the sheet is open, mark the pending tool row's status as `waiting`
+   in the `--you` tone — matches telas/04.html's inline `dur c-you` span. */
+.tool-waiting {
+  margin-left: auto;
+  color: var(--you);
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.2px;
+  font-family: var(--sans);
+}
 
 /* Short-lived "sent" feedback for /key and /text — the Claude pane itself gives
    no visible confirmation on the phone, so this is the only sign it worked. */
@@ -579,6 +727,15 @@ body.state-done   .strip-state  { color: var(--done); }
 body.state-idle   .status-strip { border-top-color: var(--line); }
 body.state-idle   .strip-state  { color: var(--text-3); }
 
+/* Urgent composes the strip as `Needs you · <reason> · <elapsed>` — drop the
+   right-anchor on elapsed and paint `·` separators between the three parts. */
+body.state-urgent .strip-elapsed { margin-left: 0; }
+body.state-urgent .strip-tool::before,
+body.state-urgent .strip-elapsed::before {
+  content: '· ';
+  color: var(--text-3);
+}
+
 /* Pending echo: the user's turn is on screen before the server has acked it. */
 .turn-pending {
   opacity: 0.65;
@@ -689,14 +846,14 @@ body.state-idle   .strip-state  { color: var(--text-3); }
 }
 .topbar .new-session:active { filter: brightness(1.1); }
 
-.sheet {
+#new-sheet {
   position: fixed; inset: 0; z-index: 10;
   display: flex; align-items: flex-end; justify-content: center;
 }
-.sheet-backdrop {
+#new-sheet .sheet-backdrop {
   position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55);
 }
-.sheet-body {
+#new-sheet .sheet-body {
   position: relative;
   width: 100%; max-width: 540px;
   background: var(--sunk); color: var(--text);
@@ -705,8 +862,8 @@ body.state-idle   .strip-state  { color: var(--text-3); }
   padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   max-height: 85vh; overflow: auto;
 }
-.sheet-head { display: flex; justify-content: space-between; align-items: baseline; }
-.sheet-head h2 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text); }
+#new-sheet .sheet-head { display: flex; justify-content: space-between; align-items: baseline; }
+#new-sheet .sheet-head h2 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text); }
 .sheet-close {
   background: transparent; border: 0; color: var(--text-2);
   font-size: 22px; line-height: 1; cursor: pointer; padding: 0 6px;
