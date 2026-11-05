@@ -264,7 +264,9 @@
   const statusEl = document.getElementById('term-status');
   function renderStatus() {
     if (!statusEl) return;
-    const cols = lastMaxCols > 0 ? lastMaxCols : 0;
+    // Cols is only meaningful when the layout preserves line width — in wrap
+    // mode the terminal reflows, so the number would mislead.
+    const cols = (mode === 'fit' || mode === 'pan') ? lastMaxCols : 0;
     const state = following ? 'following' : 'paused';
     statusEl.textContent = cols > 0 ? (cols + ' cols · ' + state) : state;
   }

@@ -316,7 +316,7 @@ func TestKeyAllowlistAccepted(t *testing.T) {
 
 // The terminal key bar (UX 7/8) sends each glyph as its exact tmux token on
 // POST /keys. These are the keys the two-row bar ships: row 1 (Esc, Tab, arrows,
-// Enter, ^C) plus row 2 (BSpace, ^A, ^E, ^U, ^W, ^L, ^R). The ⌨ button is
+// Enter) plus row 2 (BSpace, ^A, ^E, ^U, ^W, ^L, ^R, ^C). The ⌨ button is
 // deliberately absent — it only focuses the textarea, it does not POST.
 func TestTerminalKeyBarSendsMappedTmuxKey(t *testing.T) {
 	srv, calls := mkConvServer(t, map[string]string{"s1": "%1"}, nil)

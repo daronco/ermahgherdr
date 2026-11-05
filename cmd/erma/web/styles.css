@@ -1065,6 +1065,7 @@ body.offline .strip-tool { color: var(--text-3); font-family: var(--sans); }
   white-space: pre;
   overflow-x: auto;
   overflow-y: auto;
+  /* 168px key bar + 56px mode row + 56px tab bar + ~40px breathing room */
   max-height: calc(100vh - 320px);
 }
 .term-screen--wrap {
@@ -1073,6 +1074,7 @@ body.offline .strip-tool { color: var(--text-3); font-family: var(--sans); }
   overflow-x: hidden;
 }
 .term-screen--pan {
+  /* explicit state marker; base .term-screen already applies these */
   white-space: pre;
   overflow-x: auto;
 }
