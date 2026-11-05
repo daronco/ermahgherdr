@@ -77,7 +77,8 @@ type Session struct {
 	Dai                 bool   // the Dai session dai-live keeps (pane option @dai_live)
 	Prompt              string // the question text parsed off the pane's screen, when a dialog is up
 	Choices             []Choice
-	InputDirty          bool // the pane's input box has non-whitespace content
+	InputDirty          bool   // the pane's input box has non-whitespace content
+	Dir                 string // the pane's working directory (pane_current_path)
 	S, W, P             int
 }
 
@@ -667,6 +668,7 @@ func gather(permMiss map[string]int, write bool) ([]Session, Poll) {
 			Prompt:     poll.Prompts[c[0]],
 			Choices:    poll.Choices[c[0]],
 			InputDirty: poll.InputDirty[c[0]],
+			Dir:        c[6],
 			S:          atoi(c[1]), W: atoi(c[2]), P: atoi(c[3]),
 		})
 	}

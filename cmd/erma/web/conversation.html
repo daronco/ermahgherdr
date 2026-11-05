@@ -11,14 +11,22 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="conv-page">
-  <header class="topbar">
+  <header class="topbar conv-topbar">
     <a class="back" href="/" aria-label="back">←</a>
-    <span class="title" id="conv-title">session</span>
-    <span class="counts" id="conv-badge" aria-live="polite"></span>
-    <span class="status" id="conv-conn" title="SSE connection">·</span>
+    <div class="conv-title-block">
+      <span class="title" id="conv-title">session</span>
+      <span class="conv-dir" id="conv-dir"></span>
+    </div>
+    <span class="pill conv-pill" id="conv-pill" aria-live="polite">idle</span>
+    <span class="status conv-conn" id="conv-conn" title="SSE connection">·</span>
+    <!-- TODO: session menu — wire up in a later PR. Until then, no menu ARIA
+         roles so screen readers don't announce an interactive menu that does
+         nothing. -->
+    <button class="conv-menu" id="conv-menu" type="button" aria-label="session menu">⋮</button>
+    <span class="counts" id="conv-badge" aria-live="polite" hidden></span>
   </header>
 
-  <nav class="tabs" role="tablist" aria-label="session views">
+  <nav class="tabs segmented" role="tablist" aria-label="session views">
     <button class="tab active" role="tab" data-tab="conversation" aria-selected="true">Conversation</button>
     <button class="tab" role="tab" data-tab="terminal" aria-selected="false">Terminal</button>
   </nav>
@@ -47,31 +55,42 @@
     <main class="conv-main">
       <button id="earlier" class="earlier" hidden>load earlier</button>
       <ol id="turns" class="turns" aria-live="polite"></ol>
-      <p id="conv-empty" class="empty" hidden>no turns yet</p>
+      <div id="conv-empty" class="conv-empty" hidden>
+        <div class="conv-empty-glyph" aria-hidden="true">&gt;_</div>
+        <p class="conv-empty-title">No turns yet</p>
+        <p class="conv-empty-sub">
+          <span id="conv-empty-sub-lead">Claude is ready</span><span id="conv-empty-sub-in"> in </span><code class="conv-empty-dir" id="conv-empty-dir"></code>.
+          Your first message starts the conversation.
+        </p>
+      </div>
     </main>
 
     <footer class="status-strip" id="status-strip" aria-live="polite">
       <span class="strip-state" id="strip-state">idle</span>
-      <span class="strip-tool" id="strip-tool"></span>
+      <span class="strip-detail" id="strip-detail"></span>
       <span class="strip-elapsed" id="strip-elapsed">00:00</span>
+      <button class="strip-stop" id="strip-stop" type="button" aria-label="Stop" hidden>
+        <span class="strip-stop-glyph" aria-hidden="true">■</span>
+        <span class="strip-stop-text">Stop</span>
+      </button>
     </footer>
 
-    <footer class="composer">
-      <div class="qkbar" role="toolbar" aria-label="quick keys">
-        <button class="qk" data-key="esc" title="Escape">Esc</button>
-        <button class="qk danger" data-key="ctrl-c" title="Interrupt">^C</button>
-      </div>
+    <footer class="composer composer--empty" id="composer">
       <p id="send-warn" class="send-warn" hidden></p>
       <div class="replybox">
         <div class="replyfield">
-          <textarea id="reply" rows="1" placeholder="type a reply, Enter to send"></textarea>
+          <textarea id="reply" rows="1" placeholder="Message Claude…"></textarea>
           <button id="expand" class="expand" type="button" title="Toggle full-screen editor" aria-label="Toggle full-screen editor" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>
           </button>
         </div>
         <div class="replybtns">
-          <button id="voice" class="voice" type="button" title="Dictate (pt-BR)" aria-label="Dictate reply (pt-BR)" aria-pressed="false" hidden>🎙</button>
-          <button id="send" class="send" title="Send">Send</button>
+          <button id="voice" class="round voice" type="button" title="Dictate (pt-BR)" aria-label="Dictate reply (pt-BR)" aria-pressed="false" hidden>
+            <span aria-hidden="true">🎙</span>
+          </button>
+          <button id="send" class="round send" type="button" title="Send" aria-label="Send">
+            <span aria-hidden="true">➤</span>
+          </button>
         </div>
       </div>
     </footer>

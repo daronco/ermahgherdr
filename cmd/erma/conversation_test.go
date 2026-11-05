@@ -590,18 +590,19 @@ func TestStreamResumesFromCursor(t *testing.T) {
 
 // stateStripMap: the SSE state → status strip label contract. The client
 // mirror of this table lives in cmd/erma/web/conversation.js inside
-// updateStrip(); the two must stay in sync.
+// stateLabel(); the two must stay in sync.
 //
 //	state       strip label
 //	-------     -----------------
 //	proc        working
 //	urgent      your turn
-//	done        waiting on you
+//	done        waiting
 //	idle        idle
+//	paused      paused  (via row.marks, not row.state)
 var stateStripMap = map[string]string{
 	"proc":   "working",
 	"urgent": "your turn",
-	"done":   "waiting on you",
+	"done":   "waiting",
 	"idle":   "idle",
 }
 
@@ -614,9 +615,13 @@ func TestConversationAssetsCarryStatusStrip(t *testing.T) {
 		"/conversation.html": {
 			`id="status-strip"`,
 			`id="strip-state"`,
-			`id="strip-tool"`,
+			`id="strip-detail"`,
 			`id="strip-elapsed"`,
+			`id="strip-stop"`,
 			`class="status-strip"`,
+			`id="conv-dir"`,
+			`id="conv-pill"`,
+			`id="conv-empty-dir"`,
 		},
 		"/conversation.js": {
 			`updateStrip`,
@@ -625,12 +630,19 @@ func TestConversationAssetsCarryStatusStrip(t *testing.T) {
 			`turn-pending`,
 			`turn-failed`,
 			`lastUserTs`,
+			`composer--empty`,
+			`strip-stop`,
 		},
 		"/styles.css": {
 			`.status-strip`,
 			`.turn-pending`,
 			`.turn-failed`,
 			`.strip-elapsed`,
+			`.strip-stop`,
+			`.strip-detail`,
+			`.conv-empty`,
+			`.conv-dir`,
+			`.composer--empty`,
 		},
 	} {
 		r := httptest.NewRequest(http.MethodGet, path, nil)
