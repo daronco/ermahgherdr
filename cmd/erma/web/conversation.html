@@ -29,10 +29,16 @@
     <span class="offline-retry" id="offline-retry"></span>
   </section>
 
-  <section id="perm-banner" class="perm-banner" hidden>
-    <div class="perm-head">Permission requested</div>
-    <div class="perm-body" id="perm-body"></div>
-    <div class="perm-choices" id="perm-choices"></div>
+  <section id="perm-sheet" class="sheet perm-sheet" hidden aria-label="Permission request">
+    <div class="sheet-head">
+      <span class="sheet-label">● PERMISSION</span>
+      <button id="perm-chevron" class="sheet-chevron" type="button" aria-expanded="true" aria-label="Collapse"></button>
+    </div>
+    <h2 class="sheet-title" id="perm-title"></h2>
+    <div class="sheet-body" id="perm-body-wrap">
+      <div class="sheet-preview" id="perm-preview"></div>
+      <div class="sheet-choices" id="perm-choices"></div>
+    </div>
   </section>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
