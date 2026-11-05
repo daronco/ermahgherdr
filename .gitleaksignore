@@ -6,3 +6,6 @@
 371dc2b575aa013fa4f28f4efbf6c369ac48e0f4:cmd/erma/serve_paths_test.go:local-home-path:128
 371dc2b575aa013fa4f28f4efbf6c369ac48e0f4:cmd/erma/serve_paths_test.go:local-home-path:132
 89ba8a3dce1de0d6e99c5c5029ce5388a67233b9:cmd/erma/serve_paths_test.go:local-home-path:122
+
+# Placeholder home path in a test fixture, replaced in a later commit of the same PR (not a real path).
+bbbb05a7a38fddd5e5ee7e1b3272aed172438125:cmd/erma/serve_test.go:local-home-path:502
