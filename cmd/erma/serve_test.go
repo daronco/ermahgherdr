@@ -499,7 +499,7 @@ func TestHomeAbbrev(t *testing.T) {
 		{"/home/me", "~"},
 		{"/home/me/code/acme-api", "~/code/acme-api"},
 		{"/var/log", "/var/log"},
-		{"/home/other/x", "/home/other/x"},
+		{"/home/alice/x", "/home/alice/x"},
 	} {
 		if got := homeAbbrev(c.in); got != c.want {
 			t.Errorf("homeAbbrev(%q) = %q, want %q", c.in, got, c.want)
