@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/daronco/ermahgherdr/internal/session"
 )
@@ -296,6 +297,9 @@ type streamEvent struct {
 	Data  any
 }
 
+// streamPingInterval must stay well under the client's HEARTBEAT_GAP_MS.
+var streamPingInterval = 5 * time.Second
+
 // handleConversationStream: SSE for one sid. On connect it sends a `state`
 // event with the session's row and, unless the client says where it already is
 // (?after=, or Last-Event-ID on a reconnect), a `conversation` event with the
@@ -346,6 +350,10 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 	}
 	ctx := r.Context()
 	transcripts := session.WatchTranscript(ctx, sid, servePollInterval, from)
+	// The hub only sends on change, so a quiet session would look like a dead
+	// link to the client's watchdog; a periodic ping keeps it honest.
+	ping := time.NewTicker(streamPingInterval)
+	defer ping.Stop()
 
 	for {
 		select {
@@ -367,6 +375,9 @@ func (s *server) handleConversationStream(w http.ResponseWriter, r *http.Request
 				writeSSE(w, "state", row)
 				flusher.Flush()
 			}
+		case <-ping.C:
+			writeSSE(w, "ping", struct{}{})
+			flusher.Flush()
 		}
 	}
 }

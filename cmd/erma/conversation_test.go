@@ -703,3 +703,37 @@ func TestConversationOfNewSessionWithoutTranscript(t *testing.T) {
 		t.Fatal("no tmux call for the first message")
 	}
 }
+
+// A quiet session sends nothing through the hub, so without a ping the
+// client's heartbeat watchdog would call a live laptop unreachable.
+func TestStreamPingsWhileQuiet(t *testing.T) {
+	old := streamPingInterval
+	streamPingInterval = 50 * time.Millisecond
+	defer func() { streamPingInterval = old }()
+
+	srv, _ := mkConvServer(t, map[string]string{"s1": "%1"}, nil)
+	mintCSRF(t, srv, "s1")
+	writeLongTranscript(t, 3)
+	ts := httptest.NewServer(srv.mux())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/sessions/s1/stream", nil)
+	req.Header.Set(headerLogin, "ok@example.com")
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatal("stream ended without a ping:", err)
+		}
+		if strings.TrimSpace(line) == "event: ping" {
+			return
+		}
+	}
+}

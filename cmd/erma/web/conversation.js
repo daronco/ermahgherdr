@@ -1141,6 +1141,7 @@
     const es = new EventSource('/api/sessions/' + encodeURIComponent(SID) + '/stream?after=' + cursor);
     es.addEventListener('open', () => applyOnline(true));
     es.addEventListener('error', () => applyOnline(false));
+    es.addEventListener('ping', () => bumpHeartbeat());
     es.addEventListener('conversation', (ev) => {
       bumpHeartbeat();
       try {
