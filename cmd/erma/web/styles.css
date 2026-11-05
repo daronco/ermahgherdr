@@ -76,7 +76,7 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* Classes that set `display` (.sheet is flex) beat the UA's [hidden] rule, so
+/* Classes that set `display` (the new-session sheet is flex) beat the UA's [hidden] rule, so
    the attribute alone never hid them; the new-session sheet could not close. */
 [hidden] { display: none !important; }
 
@@ -846,14 +846,14 @@ body.state-urgent .strip-elapsed::before {
 }
 .topbar .new-session:active { filter: brightness(1.1); }
 
-.sheet {
+#new-sheet {
   position: fixed; inset: 0; z-index: 10;
   display: flex; align-items: flex-end; justify-content: center;
 }
-.sheet-backdrop {
+#new-sheet .sheet-backdrop {
   position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55);
 }
-.sheet-body {
+#new-sheet .sheet-body {
   position: relative;
   width: 100%; max-width: 540px;
   background: var(--sunk); color: var(--text);
@@ -862,8 +862,8 @@ body.state-urgent .strip-elapsed::before {
   padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   max-height: 85vh; overflow: auto;
 }
-.sheet-head { display: flex; justify-content: space-between; align-items: baseline; }
-.sheet-head h2 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text); }
+#new-sheet .sheet-head { display: flex; justify-content: space-between; align-items: baseline; }
+#new-sheet .sheet-head h2 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text); }
 .sheet-close {
   background: transparent; border: 0; color: var(--text-2);
   font-size: 22px; line-height: 1; cursor: pointer; padding: 0 6px;
