@@ -44,9 +44,12 @@
       window.addEventListener('resize', apply);
     }
   })();
-  const permEl = document.getElementById('perm-banner');
-  const permBodyEl = document.getElementById('perm-body');
+  const permEl = document.getElementById('perm-sheet');
+  const permBodyWrapEl = document.getElementById('perm-body-wrap');
+  const permTitleEl = document.getElementById('perm-title');
+  const permPreviewEl = document.getElementById('perm-preview');
   const permChoicesEl = document.getElementById('perm-choices');
+  const permChevronEl = document.getElementById('perm-chevron');
   const replyEl = document.getElementById('reply');
   const sendBtn = document.getElementById('send');
   const voiceBtn = document.getElementById('voice');
@@ -416,12 +419,14 @@
     earlierBtn.hidden = start <= 0;
   }
 
-  // latestPendingTool: walk the turn store from the tail for the newest
+  // latestPendingToolCall: walk the turn store from the tail for the newest
   // assistant turn carrying a tool block that has no later tool_result turn.
   // That's the tool currently running — the CLI spinner shows the same thing.
+  // Returns the tool object (name + preview fields) so the perm sheet can
+  // read file_path / command / diff_preview without re-parsing anything.
   // Assumes sequential tool execution: any later tool_result is treated as the
   // match. Parallel tool calls would need result-id correlation.
-  function latestPendingTool() {
+  function latestPendingToolCall() {
     for (let i = allTurns.length - 1; i >= 0; i--) {
       const t = allTurns[i];
       if (!(t.role === 'assistant' && t.tool)) continue;
@@ -429,9 +434,14 @@
       for (let j = i + 1; j < allTurns.length; j++) {
         if (allTurns[j].role === 'tool_result') { hasResult = true; break; }
       }
-      if (!hasResult) return (t.tool && t.tool.name) || '';
+      if (!hasResult) return t.tool;
     }
-    return '';
+    return null;
+  }
+
+  function latestPendingTool() {
+    const t = latestPendingToolCall();
+    return t ? (t.name || '') : '';
   }
 
   function fmtElapsed(ms) {
@@ -459,17 +469,31 @@
     elapsedTimer = 0;
   }
 
+  // reasonForPendingTool maps a tool name to the short human reason the strip
+  // shows while the sheet is open. The pending-tool lookup lives here because
+  // the strip composes "Needs you · <reason> · <elapsed>" and the reason is
+  // the only part that depends on what the tool is doing.
+  function reasonForPendingTool(toolName) {
+    if (toolName === 'Edit' || toolName === 'Write' || toolName === 'MultiEdit') {
+      return 'Permission to edit a file';
+    }
+    if (toolName === 'Bash') return 'Permission to run a command';
+    // AskUserQuestion fires without a preceding tool_use row — fall through to
+    // the generic label so the strip stays informative.
+    return 'Question';
+  }
+
   // stateLabel maps the row's semantic state to the design's state word. The
   // paused mark trumps the state — a paused session reads as "paused" no matter
   // what the underlying pane is doing.
   function stateLabel(state, marks) {
-    if (marks === 'paused') return 'paused';
+    if (marks === 'paused') return 'Paused';
     switch (state) {
-      case 'proc':   return 'working';
-      case 'urgent': return 'your turn';
-      case 'done':   return 'waiting';
-      case 'idle':   return 'idle';
-      default:       return state || 'idle';
+      case 'proc':   return 'Working';
+      case 'urgent': return 'Needs you';
+      case 'done':   return 'Waiting';
+      case 'idle':   return 'Idle';
+      default:       return state || 'Idle';
     }
   }
 
@@ -478,29 +502,11 @@
     if (marks === 'paused') return 'Paused';
     switch (state) {
       case 'proc':   return 'Working';
-      case 'urgent': return 'Your turn';
+      case 'urgent': return 'Needs you';
       case 'done':   return 'Waiting';
       case 'idle':   return 'Idle';
       default:       return state || 'Idle';
     }
-  }
-
-  // Compact a prompt down to a strip-sized "Permission to <X>" line. The raw
-  // prompt tends to carry a verb clause after "to"; keep the first sentence.
-  function compactPermission(prompt) {
-    if (!prompt) return 'Permission requested';
-    // indexOf runs on a lowercase copy to match case-insensitively, but the
-    // slice offset is the same because toLowerCase() preserves byte offsets
-    // for the ASCII marker "do you want to " — the original casing of `rest`
-    // is what we want to surface.
-    const idx = prompt.toLowerCase().indexOf('do you want to ');
-    if (idx >= 0) {
-      let rest = prompt.slice(idx + 'do you want to '.length).trim();
-      rest = rest.split(/[?.\n]/)[0].trim();
-      if (rest) return 'Permission to ' + rest;
-    }
-    const firstLine = prompt.split(/\n/)[0].trim();
-    return firstLine || 'Permission requested';
   }
 
   // "<N>m" / "<N>h" — rounds down. Returns '' when the timestamp is unknown
@@ -541,8 +547,10 @@
         if (sub) return sub;
         return '';
       }
-      case 'urgent':
-        return compactPermission(latestScreenPrompt);
+      case 'urgent': {
+        const pending = latestPendingToolCall();
+        return reasonForPendingTool(pending ? pending.name : '');
+      }
       case 'done':
         return lastAssistantTs ? ('last reply ' + fmtTime(lastAssistantTs)) : '';
       case 'idle':
@@ -562,6 +570,42 @@
     if (stripStopEl) stripStopEl.hidden = !(lastKnownState === 'proc' && !paused);
     // Top-border color is driven by a body class (set in applyState). Paused
     // sessions cancel the proc/urgent border; the class toggle handles that.
+    // Urgent reads `Needs you · <reason> · <elapsed>`: paint the elapsed
+    // segment now instead of waiting for the next 1-Hz tick.
+    if (lastKnownState === 'urgent') tickElapsed();
+    refreshPendingWaitingLabel();
+  }
+
+  // refreshPendingWaitingLabel marks the pending tool row with a "waiting"
+  // badge while the state is urgent, and clears the badge on any other state.
+  // Walks turnsEl's children because the DOM already aligns with allTurns'
+  // order (fold groups preserve that order); result rows cancel the pending
+  // marker so a tool whose result already arrived does not show "waiting".
+  function refreshPendingWaitingLabel() {
+    if (!turnsEl) return;
+    turnsEl.querySelectorAll('.tool-waiting').forEach((el) => el.remove());
+    if (lastKnownState !== 'urgent') return;
+    let candidate = null;
+    for (const li of turnsEl.children) {
+      if (li.classList.contains('turn-assistant') && li.querySelector('.turn-tool')) {
+        candidate = li;
+      } else if (li.classList.contains('turn-tools')) {
+        candidate = li;
+      } else if (li.classList.contains('turn-tool_result')) {
+        candidate = null;
+      }
+    }
+    if (!candidate) return;
+    let host = candidate.querySelector('.turn-tool');
+    if (!host) {
+      const steps = candidate.querySelectorAll('.tool-step');
+      host = steps[steps.length - 1] || null;
+    }
+    if (!host) return;
+    const span = document.createElement('span');
+    span.className = 'tool-waiting';
+    span.textContent = 'waiting';
+    host.appendChild(span);
   }
 
   function applyState(row) {
@@ -605,7 +649,7 @@
       const inEl = document.getElementById('conv-empty-sub-in');
       if (inEl) inEl.hidden = !row.dir;
     }
-    renderPermBanner();
+    renderPermSheet();
     updateStrip();
   }
 
@@ -619,37 +663,162 @@
     pillEl.textContent = pillLabel(row.state, row.marks);
   }
 
-  // The permission banner shows whenever the row is `urgent`. The server parses
-  // the pane's Screen and sends the question text as `row.prompt`; if that is
-  // missing (older server, or the Screen hasn't been read yet), fall back to a
-  // generic nudge. Choices come alongside the prompt; a tap on a choice posts
-  // the matching digit to /key.
-  function renderPermBanner() {
+  // sheetCollapsed: the chevron's closed/open state, kept module-local so a
+  // poll that re-renders the sheet does not re-expand it. Spec: the choice
+  // persists across polls and resets when state leaves `urgent`.
+  let sheetCollapsed = false;
+  // diffExpanded: whether the in-sheet Full-diff pane is open. Separate from
+  // sheetCollapsed so collapsing the sheet does not forget the diff pref.
+  let diffExpanded = false;
+
+  // renderPermSheet shows the bottom sheet whenever the row is `urgent`. The
+  // title is the server-parsed question (`row.prompt`); the preview block is
+  // built from the latest pending tool call's structured preview fields —
+  // `file_path` + the first − / + diff lines for Edit/Write/MultiEdit, the
+  // raw command for Bash. All content enters the DOM via textContent, never
+  // innerHTML — a tool_use input carrying "<script>" renders as literal text.
+  function renderPermSheet() {
+    if (!permEl) return;
     if (lastKnownState !== 'urgent') {
       permEl.hidden = true;
       permChoicesEl.replaceChildren();
+      permPreviewEl.replaceChildren();
+      permTitleEl.textContent = '';
+      sheetCollapsed = false;
+      diffExpanded = false;
+      updateChevron();
+      permEl.classList.remove('collapsed');
       return;
     }
     permEl.hidden = false;
-    permBodyEl.textContent = latestScreenPrompt || 'Claude is waiting on an answer. Pick a choice or press Esc.';
+    permEl.classList.toggle('collapsed', sheetCollapsed);
+    permTitleEl.textContent = latestScreenPrompt || 'Claude is waiting on an answer.';
+    renderPermPreview();
+    renderPermChoices();
+    updateChevron();
+  }
+
+  function updateChevron() {
+    if (!permChevronEl) return;
+    permChevronEl.setAttribute('aria-expanded', sheetCollapsed ? 'false' : 'true');
+    permChevronEl.setAttribute('aria-label', sheetCollapsed ? 'Expand' : 'Collapse');
+  }
+
+  function renderPermPreview() {
+    permPreviewEl.replaceChildren();
+    const tool = latestPendingToolCall();
+    if (!tool) return; // AskUserQuestion: no tool_use → no preview block
+    // Bash: single mono block with the command. No diff controls.
+    if (tool.name === 'Bash') {
+      if (!tool.command) return;
+      const box = document.createElement('div');
+      box.className = 'sheet-cmd';
+      const pre = document.createElement('pre');
+      pre.className = 'sheet-cmd-body';
+      pre.textContent = tool.command;
+      box.appendChild(pre);
+      permPreviewEl.appendChild(box);
+      return;
+    }
+    // Edit / Write / MultiEdit: file path header + diff preview + optional
+    // Full-diff expander.
+    const full = tool.diff_full || [];
+    const preview = tool.diff_preview || [];
+    if (!tool.file_path && !preview.length) return;
+    const box = document.createElement('div');
+    box.className = 'sheet-diff';
+    if (tool.file_path) {
+      const head = document.createElement('div');
+      head.className = 'sheet-diff-head';
+      const path = document.createElement('span');
+      path.className = 'sheet-diff-path';
+      path.textContent = tool.file_path;
+      head.appendChild(path);
+      if (full.length > preview.length) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'sheet-diff-toggle';
+        btn.textContent = diffExpanded ? 'Hide diff' : 'Full diff';
+        btn.addEventListener('click', () => {
+          diffExpanded = !diffExpanded;
+          renderPermPreview();
+        });
+        head.appendChild(btn);
+      }
+      box.appendChild(head);
+    }
+    const body = document.createElement('div');
+    body.className = 'sheet-diff-body';
+    const lines = diffExpanded ? full : preview;
+    for (const line of lines) appendDiffLine(body, line);
+    if (!diffExpanded && full.length > preview.length) {
+      const ellipsis = document.createElement('div');
+      ellipsis.className = 'sheet-diff-line sheet-diff-ellipsis';
+      ellipsis.textContent = '…';
+      body.appendChild(ellipsis);
+    }
+    box.appendChild(body);
+    permPreviewEl.appendChild(box);
+  }
+
+  function appendDiffLine(host, line) {
+    const row = document.createElement('div');
+    row.className = 'sheet-diff-line sheet-diff-' + (line.kind || 'ctx');
+    const marker = line.kind === 'add' ? '+ ' : line.kind === 'del' ? '− ' : '  ';
+    row.textContent = marker + (line.text || '');
+    host.appendChild(row);
+  }
+
+  function renderPermChoices() {
     permChoicesEl.replaceChildren();
+    let first = true;
+    let hasEsc = false;
     for (const c of latestChoices) {
       if (!c || !c.key) continue;
+      if (c.key === 'esc') hasEsc = true;
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'qk perm-choice';
+      b.className = 'choice' + (first ? ' primary' : '');
       b.setAttribute('data-key', c.key);
-      b.textContent = c.key + '. ' + (c.label || '');
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = c.key;
+      b.appendChild(k);
+      const lbl = document.createElement('span');
+      lbl.className = 'choice-label';
+      lbl.textContent = c.label || '';
+      b.appendChild(lbl);
       b.addEventListener('click', () => callKey(c.key));
       permChoicesEl.appendChild(b);
+      first = false;
     }
-    const esc = document.createElement('button');
-    esc.type = 'button';
-    esc.className = 'qk perm-choice';
-    esc.setAttribute('data-key', 'esc');
-    esc.textContent = 'Esc';
-    esc.addEventListener('click', () => callKey('esc'));
-    permChoicesEl.appendChild(esc);
+    // Server-parsed choices never include the "Esc to cancel" footer as its
+    // own key (see extractPromptChoices), so always append a dismiss affordance
+    // unless the server did send one explicitly.
+    if (!hasEsc) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'choice';
+      b.setAttribute('data-key', 'esc');
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = 'esc';
+      b.appendChild(k);
+      const lbl = document.createElement('span');
+      lbl.className = 'choice-label';
+      lbl.textContent = 'Cancel';
+      b.appendChild(lbl);
+      b.addEventListener('click', () => callKey('esc'));
+      permChoicesEl.appendChild(b);
+    }
+  }
+
+  if (permChevronEl) {
+    permChevronEl.addEventListener('click', () => {
+      sheetCollapsed = !sheetCollapsed;
+      permEl.classList.toggle('collapsed', sheetCollapsed);
+      updateChevron();
+    });
   }
 
   // showToast surfaces a short-lived "sent" indication on every successful
@@ -908,7 +1077,14 @@
     if (!stripEl) return;
     const composerEl = document.querySelector('#tab-conversation > .composer');
     if (!composerEl) return;
-    stripEl.style.bottom = composerEl.offsetHeight + 'px';
+    const ch = composerEl.offsetHeight;
+    stripEl.style.bottom = ch + 'px';
+    // Expose the composer and strip heights as CSS variables so the perm sheet
+    // can anchor its bottom edge above the strip — the sheet SHALL NOT cover
+    // the status strip at any viewport.
+    const root = document.documentElement.style;
+    root.setProperty('--composer-h', ch + 'px');
+    root.setProperty('--status-strip-h', stripEl.offsetHeight + 'px');
   }
   (function wireStripOffset() {
     const composerEl = document.querySelector('#tab-conversation > .composer');
@@ -918,6 +1094,7 @@
     }
     const ro = new ResizeObserver(syncStripOffset);
     ro.observe(composerEl);
+    if (stripEl) ro.observe(stripEl);
     syncStripOffset();
   })();
 
