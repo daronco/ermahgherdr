@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // TranscriptCwd: one project's recorded working directory, carried by the
@@ -455,6 +456,10 @@ func parseToolResultRow(line []byte) (toolResultRow, bool) {
 // carrying a tool_use with no Status yet and populates the result fields on
 // it. Returns true when a match was found; false when the tool_use is not in
 // this batch and the caller must emit an orphan row instead.
+//
+// TODO: assumes sequential tool execution — walks for the nearest pending
+// call. Parallel tool_use blocks with interleaved results need result-id
+// correlation (tool_use_id on the tool_result vs id on the tool_use).
 func attachToolResult(turns []Turn, r toolResultRow) bool {
 	for i := len(turns) - 1; i >= 0; i-- {
 		t := &turns[i]
@@ -585,7 +590,13 @@ func capBody(s string) string {
 	if len(s) <= toolResultTextCap {
 		return s
 	}
-	return s[:toolResultTextCap] + "\n…[truncated]"
+	// Back up to the nearest rune boundary so the cut never lands inside a
+	// multi-byte UTF-8 sequence.
+	cut := toolResultTextCap
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n…[truncated]"
 }
 
 // transcriptSize: the current size of sid's transcript.

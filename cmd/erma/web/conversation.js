@@ -241,14 +241,11 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'step-more';
-      const remaining = lines.length - STEP_OUTPUT_HEAD_LINES;
       btn.textContent = 'Show all ' + lines.length + ' lines';
       btn.addEventListener('click', () => {
         pre.textContent = full;
         btn.remove();
       });
-      // Avoid "remaining" lint noise: the button text already announces the total.
-      void remaining;
       out.appendChild(btn);
     }
     row.appendChild(out);
@@ -276,9 +273,10 @@
     details.appendChild(list);
     // Mark the <details> as manually toggled whenever the reader opens or
     // closes it. extendToolsGroup checks this before auto-collapsing when a
-    // live group becomes finished.
+    // live group becomes finished. A programmatic .open flip sets
+    // details._autoClose so this handler ignores the resulting event.
     details.addEventListener('toggle', () => {
-      details.dataset.manualToggle = '1';
+      if (!details._autoClose) details.dataset.manualToggle = '1';
     });
     li.appendChild(details);
     writeGroupSteps(li, steps);
@@ -303,9 +301,12 @@
     if (summary) summary.textContent = groupHeaderText(run);
     details.classList.toggle('has-failed', groupHasFailure(run));
     // Auto-collapse once the group is finished, unless the reader has touched
-    // the chevron (dataset.manualToggle).
+    // the chevron (dataset.manualToggle). Guard the toggle listener so the
+    // programmatic close does not get recorded as a manual toggle.
     if (!details.dataset.manualToggle && !groupIsLive(run)) {
+      details._autoClose = true;
       details.open = false;
+      details._autoClose = false;
     }
     const frag = document.createDocumentFragment();
     for (const s of run) frag.appendChild(renderToolStep(s));
