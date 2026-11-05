@@ -389,8 +389,8 @@ const toolResultTextCap = 8 << 10
 // toolResultRow is the extracted payload of a tool_result-only user row.
 type toolResultRow struct {
 	ts       time.Time
-	head     string          // one-line summary of the body
-	fullText string          // full body, trimmed to toolResultTextCap
+	head     string // one-line summary of the body
+	fullText string // full body, trimmed to toolResultTextCap
 	isError  bool
 	rawBody  json.RawMessage // first tool_result block's raw content (for extractToolMeta)
 }
