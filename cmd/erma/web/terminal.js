@@ -30,8 +30,13 @@
   const MAX_FETCH_ERRORS = 5;
   const KEY_ERROR_FLASH_MS = 400;
   const MODE_KEY = 'erma.terminal.mode';
+  const MODES = ['wrap', 'pan', 'fit'];
   const BASE_FONT_PX = 13;
   const MIN_FONT_PX = 8;
+  // Follow-end is "sticky": once the user scrolls the terminal pre away from
+  // the bottom, auto-scroll pauses until they return to within this many pixels
+  // of the end. A handful of pixels absorbs rounding from zoom/line-height.
+  const FOLLOW_THRESHOLD_PX = 6;
   // Conservative width-to-font ratio for the ui-monospace stack. 0.6 is a safe
   // upper bound across SF Mono, Menlo and Consolas; a measured value would be
   // slightly smaller, so this errs on the side of a readable fit (never
@@ -43,11 +48,12 @@
   let fetchErrors = 0;
   let mode = loadMode();
   let lastMaxCols = 0;
+  let following = true;
 
   function loadMode() {
     try {
       const v = localStorage.getItem(MODE_KEY);
-      return v === 'wrap' ? 'wrap' : 'fit';
+      return MODES.indexOf(v) >= 0 ? v : 'fit';
     } catch (_) { return 'fit'; }
   }
   function saveMode(v) {
@@ -230,8 +236,8 @@
 
   // Fit-mode: scale font-size down so a line of `cols` characters fits the
   // current .term-screen width. Never upscale beyond BASE_FONT_PX, never go
-  // below MIN_FONT_PX. Wrap mode clears any inline font-size so the stylesheet
-  // default wins.
+  // below MIN_FONT_PX. Wrap and Pan clear any inline font-size so the
+  // stylesheet default (BASE_FONT_PX) wins.
   function applyScale(cols) {
     if (mode !== 'fit') {
       screenEl.style.fontSize = '';
@@ -250,12 +256,26 @@
   }
 
   function applyModeClass() {
-    if (mode === 'wrap') {
-      screenEl.classList.add('term-screen--wrap');
-    } else {
-      screenEl.classList.remove('term-screen--wrap');
-    }
+    screenEl.classList.toggle('term-screen--wrap', mode === 'wrap');
+    screenEl.classList.toggle('term-screen--pan', mode === 'pan');
     applyScale(lastMaxCols);
+  }
+
+  const statusEl = document.getElementById('term-status');
+  function renderStatus() {
+    if (!statusEl) return;
+    // Cols is only meaningful when the layout preserves line width — in wrap
+    // mode the terminal reflows, so the number would mislead.
+    const cols = (mode === 'fit' || mode === 'pan') ? lastMaxCols : 0;
+    const state = following ? 'following' : 'paused';
+    statusEl.textContent = cols > 0 ? (cols + ' cols · ' + state) : state;
+  }
+
+  function atBottom() {
+    return (screenEl.scrollHeight - screenEl.scrollTop - screenEl.clientHeight) <= FOLLOW_THRESHOLD_PX;
+  }
+  function scrollToEnd() {
+    screenEl.scrollTop = screenEl.scrollHeight;
   }
 
   async function fetchScreen() {
@@ -274,9 +294,11 @@
         return;
       }
       const raw = await res.text();
-      lastMaxCols = (mode === 'fit') ? visibleCols(raw) : 0;
+      lastMaxCols = visibleCols(raw);
       screenEl.innerHTML = ansiToHtml(raw);
       applyScale(lastMaxCols);
+      if (following) scrollToEnd();
+      renderStatus();
       if (emptyEl) emptyEl.hidden = true;
       fetchErrors = 0;
     } catch (e) {
@@ -350,25 +372,57 @@
     });
   });
 
-  const modeBtn = document.getElementById('term-mode-toggle');
+  const modeBtns = document.querySelectorAll('.term-modes .term-mode');
   function reflectMode() {
-    if (!modeBtn) return;
-    modeBtn.textContent = mode;
-    modeBtn.setAttribute('aria-pressed', mode === 'wrap' ? 'true' : 'false');
-    const next = mode === 'fit' ? 'wrap' : 'fit';
-    modeBtn.setAttribute('aria-label', 'Switch terminal to ' + next + ' mode');
+    modeBtns.forEach((b) => {
+      const on = b.getAttribute('data-mode') === mode;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
   }
   applyModeClass();
   reflectMode();
-  if (modeBtn) {
-    modeBtn.addEventListener('click', () => {
-      mode = (mode === 'fit') ? 'wrap' : 'fit';
+  renderStatus();
+  modeBtns.forEach((b) => {
+    b.addEventListener('click', () => {
+      const next = b.getAttribute('data-mode');
+      if (!next || next === mode || MODES.indexOf(next) < 0) return;
+      mode = next;
       saveMode(mode);
       reflectMode();
       applyModeClass();
+      // A mode switch resets the follow intent — the user wants to see what's
+      // on screen now, not stay stuck at the old scroll position.
+      following = true;
+      renderStatus();
       if (visible) fetchScreen();
     });
+  });
+
+  // Focus-input affordance: switch to the Conversation tab and move focus into
+  // the reply textarea. No /keys request is sent — the button is a UX shortcut,
+  // not a key relay.
+  const focusInputBtn = document.getElementById('term-focus-input');
+  if (focusInputBtn) {
+    focusInputBtn.addEventListener('click', () => {
+      const convTab = document.querySelector('.tabs .tab[data-tab="conversation"]');
+      if (convTab) convTab.click();
+      const ta = document.querySelector('#tab-conversation .replybox textarea');
+      if (ta) {
+        // Delay a frame so the tab panel is visible before focus() runs; on
+        // iOS Safari, focusing a hidden textarea is a no-op.
+        requestAnimationFrame(() => ta.focus());
+      }
+    });
   }
+
+  // Follow-end tracker: any upward scroll pauses auto-scroll; coming back to
+  // the bottom resumes it. The pre element is the scroll container.
+  screenEl.addEventListener('scroll', () => {
+    const wasFollowing = following;
+    following = atBottom();
+    if (wasFollowing !== following) renderStatus();
+  });
+
   // Skip while hidden: clientWidth is 0 there, so applyScale would clear the
   // font-size and flash un-scaled text on the next tab switch.
   window.addEventListener('resize', () => {

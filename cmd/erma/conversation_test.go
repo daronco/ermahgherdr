@@ -314,6 +314,62 @@ func TestKeyAllowlistAccepted(t *testing.T) {
 	}
 }
 
+// The terminal key bar (UX 7/8) sends each glyph as its exact tmux token on
+// POST /keys. These are the keys the two-row bar ships: row 1 (Esc, Tab, arrows,
+// Enter) plus row 2 (BSpace, ^A, ^E, ^U, ^W, ^L, ^R, ^C). The ⌨ button is
+// deliberately absent — it only focuses the textarea, it does not POST.
+func TestTerminalKeyBarSendsMappedTmuxKey(t *testing.T) {
+	srv, calls := mkConvServer(t, map[string]string{"s1": "%1"}, nil)
+	tok := mintCSRF(t, srv, "s1")
+	for _, token := range []string{
+		"Escape", "Tab", "Up", "Down", "Left", "Right", "Enter", "C-c",
+		"BSpace", "C-a", "C-e", "C-u", "C-w", "C-l", "C-r",
+	} {
+		*calls = (*calls)[:0]
+		body, _ := json.Marshal(keyBody{Key: token})
+		r := httptest.NewRequest(http.MethodPost, "/api/sessions/s1/keys", bytes.NewReader(body))
+		r.Header.Set(headerLogin, "ok@example.com")
+		r.Header.Set("Origin", "http://"+r.Host)
+		r.Header.Set("X-Erma-CSRF", tok)
+		w := httptest.NewRecorder()
+		srv.mux().ServeHTTP(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Errorf("token %q: got %d, want 204 (%s)", token, w.Code, w.Body.String())
+			continue
+		}
+		if len(*calls) != 1 || (*calls)[0].Argv[0] != "send-keys" {
+			t.Errorf("token %q: wrong tmux call: %+v", token, *calls)
+			continue
+		}
+		last := (*calls)[0].Argv[len((*calls)[0].Argv)-1]
+		if last != token {
+			t.Errorf("token %q: send-keys final arg = %q, want %q", token, last, token)
+		}
+	}
+}
+
+// Unknown terminal-bar tokens 400 on /keys without invoking tmux — a UI bug or
+// a tampered request can't reach send-keys.
+func TestTerminalKeyBarRejectsUnknown(t *testing.T) {
+	srv, calls := mkConvServer(t, map[string]string{"s1": "%1"}, nil)
+	tok := mintCSRF(t, srv, "s1")
+	for _, bad := range []string{"", "escape", "tab", "C-x", "C-z", "C-d", "F1", "rm -rf /"} {
+		body, _ := json.Marshal(keyBody{Key: bad})
+		r := httptest.NewRequest(http.MethodPost, "/api/sessions/s1/keys", bytes.NewReader(body))
+		r.Header.Set(headerLogin, "ok@example.com")
+		r.Header.Set("Origin", "http://"+r.Host)
+		r.Header.Set("X-Erma-CSRF", tok)
+		w := httptest.NewRecorder()
+		srv.mux().ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("bad token %q: got %d, want 400", bad, w.Code)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Errorf("tmux called for rejected tokens: %+v", *calls)
+	}
+}
+
 func TestKeyRejectedWhenNotInAllowlist(t *testing.T) {
 	srv, calls := mkConvServer(t, map[string]string{"s1": "%1"}, nil)
 	tok := mintCSRF(t, srv, "s1")
