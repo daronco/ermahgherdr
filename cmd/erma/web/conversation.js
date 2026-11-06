@@ -66,6 +66,7 @@
   const offlineRetryEl = document.getElementById('offline-retry');
   const stripStopEl = document.getElementById('strip-stop');
   const composerEl = document.getElementById('composer');
+  const latestBtnEl = document.getElementById('latest-btn');
 
   // The CSRF token issued by GET /conversation. Needed on every POST. The
   // conversation GET refreshes it; if we have none yet, state-changing POSTs
@@ -145,55 +146,283 @@
     return window.innerHeight + window.scrollY >= document.body.scrollHeight - slop;
   }
 
-  // Build a <li> for a tool-use step inside a folded group.
+  // isWithinOneViewportOfBottom: looser cousin of isAtBottom used by the
+  // Latest button. The spec's threshold is "more than one viewport away";
+  // staying within a full window height keeps the button hidden during the
+  // last screenful of transcript.
+  function isWithinOneViewportOfBottom() {
+    return window.innerHeight + window.scrollY >= document.body.scrollHeight - window.innerHeight;
+  }
+
+  // updateLatestBtn toggles the floating "Latest ↓" button. Visible when the
+  // reader has scrolled more than one viewport above the bottom; hidden
+  // otherwise.
+  function updateLatestBtn() {
+    if (!latestBtnEl) return;
+    latestBtnEl.hidden = isWithinOneViewportOfBottom();
+  }
+
+  function scrollToLatest() {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  }
+
+  // STEP_OUTPUT_HEAD_LINES: how many lines of a successful tool_result are
+  // shown inline under a step row before the "Show all" button takes over.
+  // Mobile-first: three lines fit inside a thumb-reach card without pushing
+  // the next step off screen.
+  const STEP_OUTPUT_HEAD_LINES = 3;
+
+  // Build a <li> for a tool-use step inside a group card. The row holds a
+  // status icon (ok / err / pending spinner), the tool name, the one-line
+  // argument summary, a right-hand meta slot (+N −M, N lines, or elapsed),
+  // and — when the tool_result has text — a nested output pane with an
+  // optional "Show all N lines" expander.
   function renderToolStep(t) {
     const row = document.createElement('li');
     row.className = 'tool-step';
+    const header = document.createElement('div');
+    header.className = 'step-row';
+
+    const icon = document.createElement('span');
+    icon.className = 'step-icon ' + stepIconClass(t);
+    icon.setAttribute('aria-hidden', 'true');
+    header.appendChild(icon);
+
     const name = document.createElement('span');
     name.className = 'tool-name';
     name.textContent = (t.tool && t.tool.name) || 'tool';
-    row.appendChild(name);
+    header.appendChild(name);
+
     const args = document.createElement('span');
     args.className = 'tool-args';
     args.textContent = (t.tool && t.tool.args) || '';
-    row.appendChild(args);
+    header.appendChild(args);
+
+    const meta = document.createElement('span');
+    meta.className = 'step-meta';
+    meta.textContent = stepMetaText(t);
+    header.appendChild(meta);
+
+    row.appendChild(header);
+    appendStepOutput(row, t);
     return row;
   }
 
-  // Build the folded group chip for a run of consecutive tool-call turns.
-  // Expansion state is kept across live updates so a user who opened the chip
-  // keeps seeing the steps as new ones get appended via SSE.
-  function renderToolsGroup(steps, open) {
+  function stepIconClass(t) {
+    const status = (t.tool && t.tool.status) || '';
+    if (status === 'err') return 'step-icon--err';
+    if (status === 'ok') return 'step-icon--ok';
+    return 'step-icon--spin';
+  }
+
+  function stepMetaText(t) {
+    if (!t.tool) return '';
+    if (t.tool.meta) return t.tool.meta;
+    if (t.tool.status && typeof t.tool.duration_ms === 'number' && t.tool.duration_ms > 0) {
+      return fmtElapsed(t.tool.duration_ms);
+    }
+    return '';
+  }
+
+  function appendStepOutput(row, t) {
+    const tool = t.tool || {};
+    const head = tool.result || '';
+    const full = tool.result_text || head;
+    if (!head && !full) return;
+    const out = document.createElement('div');
+    out.className = 'step-output';
+    const lines = String(full).split('\n');
+    const headLines = lines.slice(0, STEP_OUTPUT_HEAD_LINES);
+    const pre = document.createElement('pre');
+    pre.className = 'step-output-body';
+    pre.textContent = headLines.join('\n');
+    out.appendChild(pre);
+    if (lines.length > STEP_OUTPUT_HEAD_LINES) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'step-more';
+      btn.textContent = 'Show all ' + lines.length + ' lines';
+      btn.addEventListener('click', () => {
+        pre.textContent = full;
+        btn.remove();
+      });
+      out.appendChild(btn);
+    }
+    row.appendChild(out);
+  }
+
+  // Build a step-group card. Header: `N steps · <tool-names> · <X failed>? ·
+  // <time>`. Default open while any step is still pending (live run); default
+  // closed once every step has a result (finished run). A reader's manual
+  // toggle survives SSE delta extensions — the toggle handler sets
+  // dataset.manualToggle so extendToolsGroup respects their choice.
+  function renderToolsGroup(steps, _openIgnored) {
     const li = document.createElement('li');
     li.className = 'turn turn-tools';
     const details = document.createElement('details');
     details.className = 'tools-group';
-    if (open) details.open = true;
+    if (groupIsLive(steps)) details.open = true;
+    if (groupHasFailure(steps)) details.classList.add('has-failed');
     const summary = document.createElement('summary');
-    summary.textContent = '🔧 ' + steps.length + (steps.length === 1 ? ' step' : ' steps');
+    summary.className = 'tools-summary';
+    summary.textContent = groupHeaderText(steps);
     details.appendChild(summary);
     const list = document.createElement('ul');
     list.className = 'tool-steps';
     for (const s of steps) list.appendChild(renderToolStep(s));
     details.appendChild(list);
+    // Mark the <details> as manually toggled whenever the reader opens or
+    // closes it. extendToolsGroup checks this before auto-collapsing when a
+    // live group becomes finished. A programmatic .open flip sets
+    // details._autoClose so this handler ignores the resulting event.
+    details.addEventListener('toggle', () => {
+      if (!details._autoClose) details.dataset.manualToggle = '1';
+    });
     li.appendChild(details);
+    writeGroupSteps(li, steps);
     return li;
   }
 
-  // Update an existing <li.turn.turn-tools> in place with a new step count and
-  // extra step rows. Called when an SSE delta extends the trailing group so the
-  // user's open/closed choice survives the update.
+  // Replace step rows in place when an SSE delta extends or completes the
+  // trailing group. We re-render all rows (cheap: a step-group holds a
+  // handful of items) so that an orphan tool_result delivered after the fact
+  // (patchStepFromOrphan) is also reflected. The reader's manual open/closed
+  // choice is preserved via dataset.manualToggle.
   function extendToolsGroup(li, newSteps) {
     const details = li.querySelector('details.tools-group');
     if (!details) return;
     const list = details.querySelector('ul.tool-steps');
     if (!list) return;
-    const summary = details.querySelector('summary');
-    const total = list.children.length + newSteps.length;
-    if (summary) summary.textContent = '🔧 ' + total + (total === 1 ? ' step' : ' steps');
+    const summary = details.querySelector('summary.tools-summary');
+    // Rebuild the step list from the full run so step status transitions
+    // (pending → ok/err) show up without piggy-backing the orphan path.
+    const run = readGroupSteps(li).concat(newSteps);
+    writeGroupSteps(li, run);
+    if (summary) summary.textContent = groupHeaderText(run);
+    details.classList.toggle('has-failed', groupHasFailure(run));
+    // Auto-collapse once the group is finished, unless the reader has touched
+    // the chevron (dataset.manualToggle). Guard the toggle listener so the
+    // programmatic close does not get recorded as a manual toggle.
+    if (!details.dataset.manualToggle && !groupIsLive(run)) {
+      details._autoClose = true;
+      details.open = false;
+      details._autoClose = false;
+    }
     const frag = document.createDocumentFragment();
-    for (const s of newSteps) frag.appendChild(renderToolStep(s));
-    list.appendChild(frag);
+    for (const s of run) frag.appendChild(renderToolStep(s));
+    list.replaceChildren(frag);
+  }
+
+  // readGroupSteps / writeGroupSteps stash the step turns on the DOM node so
+  // extendToolsGroup can re-render the whole run after a new step or an
+  // orphan tool_result lands. The stash is a JS reference (not JSON), so no
+  // serialization cost.
+  function readGroupSteps(li) {
+    return (li.__ermaSteps || []).slice();
+  }
+  function writeGroupSteps(li, steps) {
+    li.__ermaSteps = steps.slice();
+  }
+
+  function groupHeaderText(steps) {
+    const n = steps.length;
+    let out = n + ' step' + (n === 1 ? '' : 's');
+    const names = compactToolNames(steps);
+    if (names) out += ' · ' + names;
+    const failed = steps.reduce((acc, s) => acc + (s.tool && s.tool.status === 'err' ? 1 : 0), 0);
+    if (failed > 0) out += ' · ' + failed + ' failed';
+    const time = groupTimeText(steps);
+    if (time) out += ' · ' + time;
+    return out;
+  }
+
+  // compactToolNames builds the distinct-in-call-order tool list for the
+  // group header: a name repeating consecutively is kept up to three times
+  // before being truncated with an ellipsis. "Read, Read, Bash" or
+  // "Read, Read, Read, …".
+  function compactToolNames(steps) {
+    const names = [];
+    for (const s of steps) {
+      const n = (s.tool && s.tool.name) || '';
+      if (n) names.push(n);
+    }
+    const out = [];
+    let i = 0;
+    while (i < names.length) {
+      const name = names[i];
+      let count = 1;
+      while (i + count < names.length && names[i + count] === name) count++;
+      if (count <= 3) {
+        for (let k = 0; k < count; k++) out.push(name);
+      } else {
+        out.push(name, name, name, '…');
+      }
+      i += count;
+    }
+    return out.join(', ');
+  }
+
+  function groupIsLive(steps) {
+    for (const s of steps) {
+      if (s.tool && !s.tool.status) return true;
+    }
+    return false;
+  }
+
+  function groupHasFailure(steps) {
+    for (const s of steps) {
+      if (s.tool && s.tool.status === 'err') return true;
+    }
+    return false;
+  }
+
+  // groupTimeText sums the known step durations. For a live group we lean on
+  // the first step's timestamp vs. now so the header still ticks. An empty
+  // return hides the "· <time>" clause.
+  function groupTimeText(steps) {
+    let total = 0;
+    let anyDuration = false;
+    let anyPending = false;
+    let firstTs = 0;
+    for (const s of steps) {
+      if (s.tool && typeof s.tool.duration_ms === 'number' && s.tool.duration_ms > 0) {
+        total += s.tool.duration_ms;
+        anyDuration = true;
+      }
+      if (s.tool && !s.tool.status) anyPending = true;
+      if (s.ts) {
+        const ts = new Date(s.ts).getTime();
+        if (!isNaN(ts) && (!firstTs || ts < firstTs)) firstTs = ts;
+      }
+    }
+    if (anyPending && firstTs) return fmtElapsed(Date.now() - firstTs);
+    if (anyDuration) return fmtElapsed(total);
+    return '';
+  }
+
+  // patchStepFromOrphan folds an orphan tool_result row (one that arrived in
+  // a later SSE delta than its matching tool_use) into the last pending step
+  // of the trailing tool group. Returns true when it found a slot. The
+  // orphan carries the result fields on t.tool — same shape as a regular
+  // attached step — so we just copy them over.
+  function patchStepFromOrphan(t) {
+    const lastLi = turnsEl.lastElementChild;
+    if (!lastLi || !lastLi.classList.contains('turn-tools')) return false;
+    const steps = readGroupSteps(lastLi);
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const s = steps[i];
+      if (s.tool && !s.tool.status) {
+        s.tool.status = (t.tool && t.tool.status) || 'ok';
+        s.tool.result = (t.tool && t.tool.result) || '';
+        s.tool.result_text = (t.tool && t.tool.result_text) || '';
+        s.tool.meta = (t.tool && t.tool.meta) || '';
+        s.tool.duration_ms = (t.tool && t.tool.duration_ms) || 0;
+        writeGroupSteps(lastLi, steps);
+        extendToolsGroup(lastLi, []); // re-render with new state
+        return true;
+      }
+    }
+    return false;
   }
 
   function renderTurn(t) {
@@ -208,7 +437,10 @@
     head.className = 'turn-head';
     const role = document.createElement('span');
     role.className = 'turn-role';
-    role.textContent = t.role === 'assistant' ? 'claude' : t.role === 'tool_result' ? 'result' : 'you';
+    // Role labels: assistant => claude, user (or anything else) => you. The
+    // orphan tool_result role is never rendered — patchStepFromOrphan folds
+    // it into the preceding step group before renderTurn ever runs.
+    role.textContent = t.role === 'assistant' ? 'claude' : 'you';
     head.appendChild(role);
     const ts = document.createElement('span');
     ts.className = 'turn-ts';
@@ -292,16 +524,37 @@
     }
   }
 
-  // The system turn is a compact grey chip: the one-line summary is visible,
-  // the full raw body sits inside a <details> and expands on tap.
+  // sysChipGlyph picks a leading glyph for a system chip from the summary
+  // text. The table is tiny on purpose — the chip is a shared primitive, so
+  // one unknown summary should fall back to a generic dot rather than
+  // growing the table.
+  function sysChipGlyph(summary) {
+    const s = String(summary || '');
+    if (/^You opened/i.test(s)) return '📂';
+    if (/^(You ran )?\//.test(s) || /^command-name:/i.test(s)) return '／';
+    return '●';
+  }
+
+  // The system turn is a compact pill chip (reusing the .syschip primitive
+  // introduced in erma UX 1/8): leading glyph derived from the summary, the
+  // one-line summary itself, and the full raw body hidden inside a <details>
+  // that expands on tap.
   function renderSystemTurn(t) {
     const li = document.createElement('li');
     li.className = 'turn turn-system';
     const details = document.createElement('details');
     details.className = 'system-detail';
     const summary = document.createElement('summary');
-    summary.className = 'system-summary';
-    summary.textContent = t.summary || 'system message';
+    summary.className = 'system-summary syschip';
+    const glyph = document.createElement('span');
+    glyph.className = 'syschip-icon';
+    glyph.setAttribute('aria-hidden', 'true');
+    glyph.textContent = sysChipGlyph(t.summary);
+    summary.appendChild(glyph);
+    const label = document.createElement('span');
+    label.className = 'syschip-label';
+    label.textContent = t.summary || 'system message';
+    summary.appendChild(label);
     details.appendChild(summary);
     if (t.text) {
       const pre = document.createElement('pre');
@@ -385,17 +638,32 @@
 
   // Append a list of turns. When the incoming run starts with tool turns and
   // the DOM already ends with a tool group, extend that existing group instead
-  // of starting a new one so the user's open/closed choice is kept.
+  // of starting a new one so the user's open/closed choice is kept. An orphan
+  // tool_result turn (server emits one when the matching tool_use shipped in
+  // an earlier delta) is folded into the last pending step via
+  // patchStepFromOrphan and never rendered as a sibling.
   function appendTurns(turns) {
     if (!turns || turns.length === 0) {
       emptyEl.hidden = turnsEl.children.length > 0;
       return;
     }
+    const renderable = [];
     for (const t of turns) {
+      if (t.role === 'tool_result') {
+        if (patchStepFromOrphan(t)) {
+          // Still record it in allTurns so latestPendingToolCall sees the
+          // completion signal when it walks the store.
+          allTurns.push(t);
+          continue;
+        }
+        // Fall through: no matching pending step; drop the row entirely —
+        // the sibling turn-tool_result render path is gone per UX 5/8.
+        allTurns.push(t);
+        continue;
+      }
+      renderable.push(t);
       if (!t._pending) reconcilePendingEcho(t);
       if (t.role === 'user' && !t._pending) {
-        // Prefer the turn's own timestamp — a batch of historical turns on
-        // reconnect or boot would otherwise reset the counter to now.
         const ts = t.ts ? new Date(t.ts).getTime() : Date.now();
         noteUserTurn(ts);
       }
@@ -407,19 +675,20 @@
     const wasBottom = isAtBottom();
     let i = 0;
     const lastLi = turnsEl.lastElementChild;
-    if (lastLi && lastLi.classList.contains('turn-tools') && isToolTurn(turns[0])) {
+    if (lastLi && lastLi.classList.contains('turn-tools') && isToolTurn(renderable[0])) {
       const run = [];
-      while (i < turns.length && isToolTurn(turns[i])) {
-        run.push(turns[i]);
+      while (i < renderable.length && isToolTurn(renderable[i])) {
+        run.push(renderable[i]);
         i++;
       }
       extendToolsGroup(lastLi, run);
     }
-    turnsEl.appendChild(foldTurnsIntoFragment(turns.slice(i)));
-    for (const t of turns) allTurns.push(t);
+    turnsEl.appendChild(foldTurnsIntoFragment(renderable.slice(i)));
+    for (const t of renderable) allTurns.push(t);
     emptyEl.hidden = turnsEl.children.length > 0;
     if (wasBottom) window.scrollTo({ top: document.body.scrollHeight });
     updateStrip();
+    updateLatestBtn();
   }
 
   function resetTurns(turns) {
@@ -447,21 +716,16 @@
   }
 
   // latestPendingToolCall: walk the turn store from the tail for the newest
-  // assistant turn carrying a tool block that has no later tool_result turn.
-  // That's the tool currently running — the CLI spinner shows the same thing.
-  // Returns the tool object (name + preview fields) so the perm sheet can
-  // read file_path / command / diff_preview without re-parsing anything.
-  // Assumes sequential tool execution: any later tool_result is treated as the
-  // match. Parallel tool calls would need result-id correlation.
+  // assistant turn whose tool call has no Status yet. That's the tool
+  // currently running — the CLI spinner shows the same thing. Returns the
+  // tool object (name + preview fields) so the perm sheet can read
+  // file_path / command / diff_preview without re-parsing anything.
   function latestPendingToolCall() {
     for (let i = allTurns.length - 1; i >= 0; i--) {
       const t = allTurns[i];
       if (!(t.role === 'assistant' && t.tool)) continue;
-      let hasResult = false;
-      for (let j = i + 1; j < allTurns.length; j++) {
-        if (allTurns[j].role === 'tool_result') { hasResult = true; break; }
-      }
-      if (!hasResult) return t.tool;
+      if (t.tool.status) continue;
+      return t.tool;
     }
     return null;
   }
@@ -615,8 +879,9 @@
   // refreshPendingWaitingLabel marks the pending tool row with a "waiting"
   // badge while the state is urgent, and clears the badge on any other state.
   // Walks turnsEl's children because the DOM already aligns with allTurns'
-  // order (fold groups preserve that order); result rows cancel the pending
-  // marker so a tool whose result already arrived does not show "waiting".
+  // order (fold groups preserve that order). A tool_result is never a
+  // sibling row any more — its arrival mutates the step's status in place —
+  // so completion naturally retracts the candidate on the next refresh.
   function refreshPendingWaitingLabel() {
     if (!turnsEl) return;
     turnsEl.querySelectorAll('.tool-waiting').forEach((el) => el.remove());
@@ -627,14 +892,12 @@
         candidate = li;
       } else if (li.classList.contains('turn-tools')) {
         candidate = li;
-      } else if (li.classList.contains('turn-tool_result')) {
-        candidate = null;
       }
     }
     if (!candidate) return;
     let host = candidate.querySelector('.turn-tool');
     if (!host) {
-      const steps = candidate.querySelectorAll('.tool-step');
+      const steps = candidate.querySelectorAll('.tool-step .step-row');
       host = steps[steps.length - 1] || null;
     }
     if (!host) return;
@@ -1180,6 +1443,13 @@
   // Wiring.
   sendBtn.addEventListener('click', () => callText(replyEl.value));
   earlierBtn.addEventListener('click', loadEarlier);
+  // Floating "Latest ↓" button: tap scrolls smoothly to the bottom and
+  // resumes auto-follow; the scroll listener keeps its visibility in sync.
+  if (latestBtnEl) {
+    latestBtnEl.addEventListener('click', scrollToLatest);
+  }
+  window.addEventListener('scroll', updateLatestBtn, { passive: true });
+  window.addEventListener('resize', updateLatestBtn);
   replyEl.addEventListener('keydown', (ev) => {
     // Enter sends; Shift+Enter inserts a newline. The textarea stays editable
     // even while a POST is in flight — the agent working does not block typing.
@@ -1344,6 +1614,7 @@
     connect();
     bumpHeartbeat();
     updateStrip();
+    updateLatestBtn();
   })();
 
   // Tab bar wiring. The Terminal tab panel owns its own polling loop in

@@ -1003,6 +1003,266 @@ func TestBuildToolCallUnknownToolLeavesPreviewEmpty(t *testing.T) {
 	}
 }
 
+// A tool_result-only user row no longer surfaces as its own Turn: the result
+// fields (Status, Result, ResultText, DurationMs, Meta) land on the preceding
+// assistant tool_use Turn in the same parseLines batch.
+func TestParseLinesAttachesToolResult(t *testing.T) {
+	toolUse, _ := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": "2026-11-05T12:00:00.000Z",
+		"message": map[string]any{
+			"role": "assistant",
+			"content": []any{
+				map[string]any{
+					"type":  "tool_use",
+					"name":  "Bash",
+					"input": map[string]any{"command": "ls"},
+				},
+			},
+		},
+	})
+	toolResult, _ := json.Marshal(map[string]any{
+		"type":      "user",
+		"timestamp": "2026-11-05T12:00:03.500Z",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{
+					"type":     "tool_result",
+					"content":  "file1.txt\nfile2.txt\n",
+					"is_error": false,
+				},
+			},
+		},
+	})
+	_, sid := writeTranscript(t, []string{string(toolUse), string(toolResult)})
+	turns, _, err := ReadConversation(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("want 1 turn (tool_use with result attached), got %d: %+v", len(turns), turns)
+	}
+	tc := turns[0].Tool
+	if tc == nil {
+		t.Fatal("want attached Tool, got nil")
+	}
+	if tc.Status != "ok" {
+		t.Errorf("Status: got %q want ok", tc.Status)
+	}
+	if !strings.Contains(tc.Result, "file1.txt") {
+		t.Errorf("Result head: got %q", tc.Result)
+	}
+	if !strings.Contains(tc.ResultText, "file1.txt") {
+		t.Errorf("ResultText: got %q", tc.ResultText)
+	}
+	if tc.DurationMs != 3500 {
+		t.Errorf("DurationMs: got %d want 3500", tc.DurationMs)
+	}
+}
+
+// is_error=true flips the Status to "err" and the Meta slot stays empty
+// (the client renders the failed step without a synthesized diff summary).
+func TestParseLinesAttachesErroredToolResult(t *testing.T) {
+	toolUse, _ := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": "2026-11-05T12:00:00.000Z",
+		"message": map[string]any{
+			"role": "assistant",
+			"content": []any{
+				map[string]any{
+					"type":  "tool_use",
+					"name":  "Bash",
+					"input": map[string]any{"command": "nope"},
+				},
+			},
+		},
+	})
+	toolResult, _ := json.Marshal(map[string]any{
+		"type":      "user",
+		"timestamp": "2026-11-05T12:00:00.500Z",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{
+					"type":     "tool_result",
+					"content":  "command not found",
+					"is_error": true,
+				},
+			},
+		},
+	})
+	_, sid := writeTranscript(t, []string{string(toolUse), string(toolResult)})
+	turns, _, err := ReadConversation(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Tool == nil {
+		t.Fatalf("want 1 turn with Tool, got %+v", turns)
+	}
+	if turns[0].Tool.Status != "err" {
+		t.Errorf("Status: got %q want err", turns[0].Tool.Status)
+	}
+	if turns[0].Tool.Meta != "" {
+		t.Errorf("Meta on errored step should stay empty, got %q", turns[0].Tool.Meta)
+	}
+}
+
+// A tool_use that has no matching tool_result in the batch stays pending
+// (Status=""). The PWA renders it with a spinner glyph while the group is
+// live.
+func TestParseLinesPendingToolUse(t *testing.T) {
+	toolUse, _ := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": "2026-11-05T12:00:00.000Z",
+		"message": map[string]any{
+			"role": "assistant",
+			"content": []any{
+				map[string]any{
+					"type":  "tool_use",
+					"name":  "Bash",
+					"input": map[string]any{"command": "sleep 30"},
+				},
+			},
+		},
+	})
+	_, sid := writeTranscript(t, []string{string(toolUse)})
+	turns, _, err := ReadConversation(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Tool == nil {
+		t.Fatalf("want 1 turn with Tool, got %+v", turns)
+	}
+	if turns[0].Tool.Status != "" {
+		t.Errorf("pending step Status should be empty, got %q", turns[0].Tool.Status)
+	}
+	if turns[0].Tool.DurationMs != 0 {
+		t.Errorf("pending step DurationMs should be 0, got %d", turns[0].Tool.DurationMs)
+	}
+}
+
+// An Edit tool_result lands with Meta set to "+N −M" derived from the
+// synthesized diff — the result body typically doesn't carry a diff header,
+// so the input-side counts are the source of truth.
+func TestParseLinesEditMeta(t *testing.T) {
+	toolUse, _ := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": "2026-11-05T12:00:00.000Z",
+		"message": map[string]any{
+			"role": "assistant",
+			"content": []any{
+				map[string]any{
+					"type": "tool_use",
+					"name": "Edit",
+					"input": map[string]any{
+						"file_path":  "/repo/x.go",
+						"old_string": "a\nb\nc",
+						"new_string": "A\nB",
+					},
+				},
+			},
+		},
+	})
+	toolResult, _ := json.Marshal(map[string]any{
+		"type":      "user",
+		"timestamp": "2026-11-05T12:00:00.100Z",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "tool_result", "content": "edit ok"},
+			},
+		},
+	})
+	_, sid := writeTranscript(t, []string{string(toolUse), string(toolResult)})
+	turns, _, err := ReadConversation(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Tool == nil {
+		t.Fatalf("want 1 Edit turn with Tool, got %+v", turns)
+	}
+	if turns[0].Tool.Meta != "+2 −3" {
+		t.Errorf("Meta: got %q want %q", turns[0].Tool.Meta, "+2 −3")
+	}
+}
+
+// A Read tool_result lands with Meta set to "N lines" counted from the body.
+func TestParseLinesReadMeta(t *testing.T) {
+	toolUse, _ := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": "2026-11-05T12:00:00.000Z",
+		"message": map[string]any{
+			"role": "assistant",
+			"content": []any{
+				map[string]any{
+					"type":  "tool_use",
+					"name":  "Read",
+					"input": map[string]any{"file_path": "/repo/README.md"},
+				},
+			},
+		},
+	})
+	toolResult, _ := json.Marshal(map[string]any{
+		"type":      "user",
+		"timestamp": "2026-11-05T12:00:00.100Z",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "tool_result", "content": "line 1\nline 2\nline 3\n"},
+			},
+		},
+	})
+	_, sid := writeTranscript(t, []string{string(toolUse), string(toolResult)})
+	turns, _, err := ReadConversation(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Tool == nil {
+		t.Fatalf("want 1 Read turn with Tool, got %+v", turns)
+	}
+	if turns[0].Tool.Meta != "3 lines" {
+		t.Errorf("Meta: got %q want %q", turns[0].Tool.Meta, "3 lines")
+	}
+}
+
+// When the tool_use already shipped in an earlier delta and only the
+// tool_result is in this batch, parseLines emits an "orphan" Turn carrying
+// just the result fields so the client can reconcile the step in its DOM.
+func TestParseLinesOrphanToolResult(t *testing.T) {
+	toolResult, _ := json.Marshal(map[string]any{
+		"type":      "user",
+		"timestamp": "2026-11-05T12:00:01.000Z",
+		"message": map[string]any{
+			"role": "user",
+			"content": []any{
+				map[string]any{
+					"type":     "tool_result",
+					"content":  "orphan body",
+					"is_error": false,
+				},
+			},
+		},
+	})
+	_, sid := writeTranscript(t, []string{string(toolResult)})
+	turns, _, err := ReadConversation(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("want 1 orphan turn, got %+v", turns)
+	}
+	if turns[0].Role != "tool_result" {
+		t.Errorf("Role: got %q want tool_result", turns[0].Role)
+	}
+	if turns[0].Tool == nil || turns[0].Tool.Status != "ok" {
+		t.Errorf("Tool: want non-nil with Status=ok, got %+v", turns[0].Tool)
+	}
+	if turns[0].Tool.Result != "orphan body" {
+		t.Errorf("Result: got %q", turns[0].Tool.Result)
+	}
+}
+
 func TestTranscriptCwdsPastLongHeader(t *testing.T) {
 	header := `{"type":"last-prompt","lastPrompt":"` + strings.Repeat("x", transcriptCwdScanBytes) + `"}`
 	writeTranscript(t, []string{header, `{"type":"user","cwd":"/work/repo"}`})
