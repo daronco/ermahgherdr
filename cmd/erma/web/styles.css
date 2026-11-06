@@ -1114,7 +1114,9 @@ body.offline .strip-tool { color: var(--text-3); font-family: var(--sans); }
 .term-keyrow {
   display: flex; gap: 6px;
 }
-.term-keyrow .tk { flex: 1; }
+/* Eight keys per row must fit a 390 px phone: let them share the width and
+   keep the 44 px touch target on height. */
+.term-keyrow .tk { flex: 1 1 0; min-width: 0; padding: 8px 0; }
 .tk {
   background: var(--raised); color: var(--text); border: 1px solid var(--line);
   padding: 8px 12px; border-radius: var(--r-sm); font: inherit; font-weight: 600;
