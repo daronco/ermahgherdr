@@ -13,6 +13,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,6 +122,30 @@ var optLine = regexp.MustCompile(`^(❯\s+)?[1-9]\.\s`)
 // display-message escapes control bytes into their \ooo spelling.
 const capSep = "~~erma-block~~"
 
+// cursorTag starts the line PollPanes appends after each capture with the
+// pane's cursor cell, so the input-box check can tell typed text from the
+// dimmed next-prompt suggestion Claude Code draws after the cursor.
+const cursorTag = "~~erma-cursor~~"
+
+// cursorPos is a pane's cursor cell; ok is false when the poll did not get one.
+type cursorPos struct {
+	x, y int
+	ok   bool
+}
+
+// splitCursor takes the trailing cursor line off a pane block.
+func splitCursor(blk string) (string, cursorPos) {
+	i := strings.LastIndex(blk, cursorTag)
+	if i < 0 {
+		return blk, cursorPos{}
+	}
+	var c cursorPos
+	if _, err := fmt.Sscanf(strings.TrimSpace(blk[i+len(cursorTag):]), "%d %d", &c.x, &c.y); err == nil {
+		c.ok = true
+	}
+	return strings.TrimSuffix(blk[:i], "\n"), c
+}
+
 // liveLines: how far above the input box the status line can sit. The task list
 // Claude draws between the two runs to six lines.
 const liveLines = 12
@@ -197,7 +222,8 @@ func PollPanes(panes []string) Poll {
 	}
 	for _, p := range panes {
 		args = append(args, ";", "display-message", "-p", "-t", p, capSep,
-			";", "capture-pane", "-p", "-t", p)
+			";", "capture-pane", "-p", "-t", p,
+			";", "display-message", "-p", "-t", p, cursorTag+"#{cursor_x} #{cursor_y}")
 	}
 	blocks := strings.Split(TmuxOut(args...), capSep+"\n")
 	var poll Poll
@@ -224,6 +250,7 @@ func PollPanes(panes []string) Poll {
 	poll.Choices = map[string][]Choice{}
 	poll.InputDirty = map[string]bool{}
 	for i, blk := range blocks[4:] {
+		blk, cur := splitCursor(blk)
 		if i < len(panes) && strings.TrimSpace(blk) != "" {
 			if sc := ReadScreen(blk); !sc.Viewer {
 				poll.Screens[panes[i]] = sc
@@ -235,7 +262,7 @@ func PollPanes(panes []string) Poll {
 						poll.Choices[panes[i]] = cs
 					}
 				}
-				if inputBoxDirty(blk) {
+				if inputBoxDirty(blk, cur) {
 					poll.InputDirty[panes[i]] = true
 				}
 			}
@@ -366,7 +393,11 @@ func extractPromptChoices(body string) []Choice {
 // non-whitespace content. The box sits between the last two solid dividers;
 // panes without that frame (a transcript viewer, a dialog that fills the
 // screen) report false — there is no visible input box to warn about.
-func inputBoxDirty(body string) bool {
+//
+// Typed text sits before the cursor; Claude Code's suggested next prompt is
+// drawn after it and looks the same in a plain capture. With the cursor inside
+// the box only what precedes it counts; without one, everything does.
+func inputBoxDirty(body string, cur cursorPos) bool {
 	lines := strings.Split(body, "\n")
 	var rules []int
 	for i, ln := range lines {
@@ -378,11 +409,26 @@ func inputBoxDirty(body string) bool {
 		return false
 	}
 	top, bot := rules[len(rules)-2], rules[len(rules)-1]
+	inBox := cur.ok && cur.y > top && cur.y < bot
 	for i := top + 1; i < bot; i++ {
-		s := strings.TrimSpace(lines[i])
-		if s == "" {
-			continue
+		ln := lines[i]
+		if inBox && i > cur.y {
+			break
 		}
+		if inBox && i == cur.y {
+			// cursor_x is a column index in tmux's grid; here we treat it as a
+			// rune count, which is only exact for single-width glyphs. The
+			// prompt (❯, space, ASCII) is single-width; a wide CJK glyph in
+			// typed content would be one rune but two columns and shift this
+			// slice by one. Good enough for the suggestion-vs-typed check and
+			// no worse than the pre-cursor behaviour.
+			if r := []rune(ln); cur.x < len(r) {
+				ln = string(r[:cur.x])
+			}
+		}
+		// Each in-box row is framed with a "❯ " prompt glyph; drop it so the
+		// emptiness check sees only what was typed.
+		s := strings.TrimSpace(ln)
 		s = strings.TrimPrefix(s, "❯")
 		if strings.TrimSpace(s) != "" {
 			return true

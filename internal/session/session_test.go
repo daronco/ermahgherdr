@@ -131,14 +131,47 @@ func TestInputBoxDirty(t *testing.T) {
 		{"only whitespace between dividers", "────\n   \n────\n", false},
 		{"content without cursor marker", "────\n hello\n────\n", true},
 	} {
-		if got := inputBoxDirty(c.body); got != c.want {
+		if got := inputBoxDirty(c.body, cursorPos{}); got != c.want {
 			t.Errorf("%s: inputBoxDirty = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
 
+// Claude Code draws its suggested next prompt after the cursor, dimmed, so a
+// plain capture of an empty box reads like typed text. Only what precedes the
+// cursor is the user's.
+func TestInputBoxDirtyWithCursor(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body string
+		cur  cursorPos
+		want bool
+	}{
+		{"suggestion after the cursor", "─────\n❯ A, commit it\n─────\n", cursorPos{2, 1, true}, false},
+		{"typed, cursor at the end", "─────\n❯ cat the file\n─────\n", cursorPos{14, 1, true}, true},
+		{"typed lines above the cursor", "─────\n❯ line one\n  line two\n─────\n", cursorPos{10, 2, true}, true},
+		{"cursor outside the box", "─────\n❯ cat the file\n─────\n", cursorPos{0, 5, true}, true},
+	} {
+		if got := inputBoxDirty(c.body, c.cur); got != c.want {
+			t.Errorf("%s: inputBoxDirty = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSplitCursor(t *testing.T) {
+	body, cur := splitCursor("line\n❯ \n" + cursorTag + "2 18\n")
+	if body != "line\n❯ " || cur != (cursorPos{2, 18, true}) {
+		t.Errorf("splitCursor = %q, %+v", body, cur)
+	}
+	if _, cur := splitCursor("no cursor line"); cur.ok {
+		t.Errorf("cursor reported without a cursor line: %+v", cur)
+	}
+}
+
 // Canonical captures: the live-tail capture has text in the input box; the
 // permission dialog screen covers the box so there is no dirt to warn about.
+// screen-suggestion carries the cursor tag at the end so the fixture also
+// exercises splitCursor + the cursor-aware slice in one pass.
 func TestInputBoxDirtyCaptures(t *testing.T) {
 	for _, c := range []struct {
 		file string
@@ -147,12 +180,14 @@ func TestInputBoxDirtyCaptures(t *testing.T) {
 		{"../../cmd/erma/testdata/screen-answered.txt", true},
 		{"../../cmd/erma/testdata/screen-background-done.txt", false},
 		{"../../cmd/erma/testdata/screen-permission.txt", false},
+		{"../../cmd/erma/testdata/screen-suggestion.txt", false},
 	} {
 		b, err := os.ReadFile(c.file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := inputBoxDirty(string(b)); got != c.want {
+		body, cur := splitCursor(string(b))
+		if got := inputBoxDirty(body, cur); got != c.want {
 			t.Errorf("%s: inputBoxDirty = %v, want %v", c.file, got, c.want)
 		}
 	}
