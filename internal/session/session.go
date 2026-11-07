@@ -416,14 +416,19 @@ func inputBoxDirty(body string, cur cursorPos) bool {
 			break
 		}
 		if inBox && i == cur.y {
+			// cursor_x is a column index in tmux's grid; here we treat it as a
+			// rune count, which is only exact for single-width glyphs. The
+			// prompt (❯, space, ASCII) is single-width; a wide CJK glyph in
+			// typed content would be one rune but two columns and shift this
+			// slice by one. Good enough for the suggestion-vs-typed check and
+			// no worse than the pre-cursor behaviour.
 			if r := []rune(ln); cur.x < len(r) {
 				ln = string(r[:cur.x])
 			}
 		}
+		// Each in-box row is framed with a "❯ " prompt glyph; drop it so the
+		// emptiness check sees only what was typed.
 		s := strings.TrimSpace(ln)
-		if s == "" {
-			continue
-		}
 		s = strings.TrimPrefix(s, "❯")
 		if strings.TrimSpace(s) != "" {
 			return true

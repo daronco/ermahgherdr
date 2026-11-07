@@ -170,6 +170,8 @@ func TestSplitCursor(t *testing.T) {
 
 // Canonical captures: the live-tail capture has text in the input box; the
 // permission dialog screen covers the box so there is no dirt to warn about.
+// screen-suggestion carries the cursor tag at the end so the fixture also
+// exercises splitCursor + the cursor-aware slice in one pass.
 func TestInputBoxDirtyCaptures(t *testing.T) {
 	for _, c := range []struct {
 		file string
@@ -178,12 +180,14 @@ func TestInputBoxDirtyCaptures(t *testing.T) {
 		{"../../cmd/erma/testdata/screen-answered.txt", true},
 		{"../../cmd/erma/testdata/screen-background-done.txt", false},
 		{"../../cmd/erma/testdata/screen-permission.txt", false},
+		{"../../cmd/erma/testdata/screen-suggestion.txt", false},
 	} {
 		b, err := os.ReadFile(c.file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := inputBoxDirty(string(b), cursorPos{}); got != c.want {
+		body, cur := splitCursor(string(b))
+		if got := inputBoxDirty(body, cur); got != c.want {
 			t.Errorf("%s: inputBoxDirty = %v, want %v", c.file, got, c.want)
 		}
 	}
