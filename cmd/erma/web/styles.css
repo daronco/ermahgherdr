@@ -735,7 +735,7 @@ main { padding: 8px 16px 24px; max-width: min(760px, 100%); margin: 0 auto; min-
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   overflow-wrap: anywhere;
   color: var(--text-2);
   max-height: 40vh;
