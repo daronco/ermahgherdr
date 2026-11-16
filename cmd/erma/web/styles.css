@@ -73,11 +73,12 @@
    narrow viewports (390 CSS px baseline). Combined with min-width: 0 on the
    flex/grid ancestors below, a future unbreakable child (long inline code,
    tool-call one-liner, path-like token) cannot push the composer or status
-   strip off-screen. */
+   strip off-screen. `clip`, not `hidden`: hidden makes html/body a scroll
+   container and unpins the sticky .topbar on scroll. */
 html, body {
   margin: 0; padding: 0; background: var(--bg); color: var(--text);
   max-width: 100%;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 body {
   font: 14px/1.45 var(--sans);

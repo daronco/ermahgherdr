@@ -91,3 +91,19 @@ func extractRuleBody(t *testing.T, src, selector string) string {
 	t.Fatalf("styles.css does not define a rule for selector %q", selector)
 	return ""
 }
+
+// The page-level safety net must not turn html/body into a scroll container:
+// `overflow-x: hidden` there unpins the sticky .topbar and tabs on scroll.
+// `clip` cuts overflow the same way without creating one.
+func TestPageSafetyNetKeepsStickyHeader(t *testing.T) {
+	css, err := webFS.ReadFile("web/styles.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sel := range []string{"html", "body"} {
+		body := extractRuleBody(t, string(css), sel)
+		if strings.Contains(body, "overflow-x: hidden") || strings.Contains(body, "overflow: hidden") {
+			t.Errorf("%s must use `overflow-x: clip`, not hidden — hidden breaks the sticky header. Got:\n%s", sel, body)
+		}
+	}
+}
