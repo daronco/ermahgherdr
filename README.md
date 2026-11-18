@@ -139,7 +139,7 @@ So without the hook the bar still gets 🟡, ⚪ and a dialog's 🟣 right — i
 bindsym $mod+c exec erma-open
 # a slim left strip
 for_window [app_id="erma"] floating enable, resize set 12 ppt 96 ppt, move position 0 ppt 2 ppt
-# record the last real terminal so Enter in the bar returns focus to it
+# record the last window used: Enter's pick among the terminals showing tmux
 exec_always erma-sway-focus
 ```
 

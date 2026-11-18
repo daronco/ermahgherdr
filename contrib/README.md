@@ -9,7 +9,7 @@ reimplement them in whatever your setup already uses.
 | `erma-hook` | tmux (jq for the subagent count) | Claude Code hook that publishes each session's live state. Without it 🟢 and the subagent count never show. |
 | `erma-ctx` | tmux, jq | Claude Code `statusLine` segment with the session's mark and the context left before auto-compact; flags the session in the bar when it runs low. |
 | `erma-open` | sway, [foot](https://codeberg.org/dnkl/foot) | Opens the bar, or focuses it if already open, in a window tagged with a stable `app_id`. |
-| `erma-sway-focus` | sway, python3 | Records the last focused non-erma window so `Enter` can hand keyboard focus back to it. |
+| `erma-sway-focus` | sway, python3 | Records the last focused non-erma window: `Enter` prefers it among the terminals showing tmux, and falls back to it when it finds none. |
 
 Using a different terminal or compositor? `erma-open` is a ~15-line wrapper —
 swap `foot` for your terminal, keeping the `app_id`/class tag. `erma-sway-focus`
@@ -30,7 +30,7 @@ Everything the helpers do is written to tmux options and one state file:
 | `@erma_flag` (pane) | erma, `erma-hook` (clears it on resume) | `erma-hook`, your tmux tab format | `paused` · `prio` — mirror of the session's mark in `flags.json` |
 | `$XDG_STATE_HOME/erma/flags.json` | erma (menu, `p` / `o`), `erma-hook` (drops `paused` when you prompt the session) | erma, `erma-ctx` | `{"<session id>": {"flag": "paused"\|"prio", "since": <unix>}}`, written under `flags.json.lock` |
 | `~/.claude/sessions/<pid>.json` | Claude Code | erma | its own registry; erma reads `sessionId` and `tmux` (`…%<pane>`) to tie a pane to a session |
-| `$XDG_RUNTIME_DIR/erma-last-term` | `erma-sway-focus` | erma | sway `con_id` of the last real terminal |
+| `$XDG_RUNTIME_DIR/erma-last-term` | `erma-sway-focus` | erma | sway `con_id` of the last focused non-erma window, whatever the app |
 
 Sessions themselves are discovered by erma directly — every tmux pane whose
 foreground command is `claude` — so a session shows up with no hook installed at

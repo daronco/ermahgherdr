@@ -674,3 +674,29 @@ func TestBadgesClearMascot(t *testing.T) {
 		}
 	}
 }
+
+// Enter lands on the terminal showing the session, not on whatever window had
+// the keyboard before the bar: that one can be a browser on another workspace.
+// The test process plays the tmux client and its parent the terminal.
+func TestFocusTarget(t *testing.T) {
+	client := []int{os.Getpid()}
+	tree := map[string]any{"nodes": []any{
+		map[string]any{"id": float64(321), "pid": float64(1 << 30)}, // the browser
+		map[string]any{"id": float64(33), "pid": float64(os.Getppid())},
+	}}
+	for _, c := range []struct {
+		name    string
+		clients []int
+		last    string
+		want    string
+	}{
+		{"browser used last", client, "321", "33"},
+		{"terminal used last", client, "33", "33"},
+		{"client sway cannot place", nil, "321", "321"},
+		{"nothing known", nil, "", ""},
+	} {
+		if got := focusTarget(tree, c.clients, c.last); got != c.want {
+			t.Errorf("%s: focusTarget = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

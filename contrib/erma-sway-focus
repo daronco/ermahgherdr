@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Sway helper: dim inactive windows, and remember the last real terminal.
+"""Sway helper: dim inactive windows, and remember the last window used.
 
 Two jobs, one focus-event subscription:
   1. Fade every unfocused window a touch so it's obvious which one is active
      (sway has no native inactive-dimming). Tune with SWAY_INACTIVE_OPACITY.
   2. Record the con_id of the last focused window that ISN'T erma, to a state
-     file. erma's "jump" mode reads it to hand keyboard focus back to your
-     main terminal after teleporting the tmux view.
+     file. Any app, not only terminals: erma's "jump" mode focuses a terminal
+     showing tmux, and reads this only to pick among several or when it finds
+     none.
 
 Launch from sway:  exec_always erma-sway-focus
 (single instance: a copy started while another runs exits at once, so reloads
@@ -60,7 +61,7 @@ def record(con):
 
 def is_bar(con):
     # prefix match, so any erma window (e.g. a second, tagged one) is excluded
-    # from being recorded as the "last real terminal" that focus returns to.
+    # from being recorded as the window focus returns to.
     return (con.get("app_id") or "").startswith(BAR_APP_ID)
 
 

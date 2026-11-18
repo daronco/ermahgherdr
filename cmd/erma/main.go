@@ -336,31 +336,60 @@ func dataCmd(hidden bool) tea.Cmd {
 
 // ---------- sway glue ----------
 
-func switchView(s sess) {
+// switchView points every tmux client but erma's own at the session and returns
+// their pids, so swayFocusMain can find the terminals now showing it.
+func switchView(s sess) []int {
 	own := ""
 	if os.Getenv("TMUX") != "" {
 		own = strings.TrimSpace(tmuxOut("display-message", "-p", "#{client_name}"))
 	}
-	for _, c := range strings.Split(tmuxOut("list-clients", "-F", "#{client_name}"), "\n") {
-		c = strings.TrimSpace(c)
-		if c != "" && c != own {
-			run("tmux", "switch-client", "-c", c, "-t", s.SessWin)
+	var pids []int
+	for _, ln := range strings.Split(tmuxOut("list-clients", "-F", "#{client_name}\t#{client_pid}"), "\n") {
+		f := strings.Split(strings.TrimSpace(ln), "\t")
+		if len(f) == 2 && f[0] != "" && f[0] != own {
+			run("tmux", "switch-client", "-c", f[0], "-t", s.SessWin)
+			pids = append(pids, atoiLocal(f[1]))
 		}
 	}
 	run("tmux", "select-window", "-t", s.SessWin)
 	run("tmux", "select-pane", "-t", s.Pane)
+	return pids
 }
 
-func swayFocusMain() {
+func swayFocusMain(clients []int) {
 	rt := os.Getenv("XDG_RUNTIME_DIR")
 	if rt == "" {
 		rt = "/tmp"
 	}
+	last := ""
 	if b, err := os.ReadFile(filepath.Join(rt, "erma-last-term")); err == nil {
-		if cid := strings.TrimSpace(string(b)); cid != "" {
-			run("swaymsg", fmt.Sprintf("[con_id=%s] focus", cid))
-		}
+		last = strings.TrimSpace(string(b))
 	}
+	tree, _ := swayTree()
+	if cid := focusTarget(tree, clients, last); cid != "" {
+		run("swaymsg", fmt.Sprintf("[con_id=%s] focus", cid))
+	}
+}
+
+// focusTarget: the window holding one of the clients, preferring the last one
+// used. The last non-erma window alone is only the fallback, for a client sway
+// cannot place (over ssh, say): it can be a browser on another workspace, and
+// focusing it took the user there instead of to the session.
+func focusTarget(tree map[string]any, clients []int, last string) string {
+	target := ""
+	walkTree(tree, func(n map[string]any) bool {
+		pid, _ := n["pid"].(float64)
+		if !hostsTmuxClient(int(pid), clients) {
+			return false
+		}
+		id, _ := n["id"].(float64)
+		target = strconv.Itoa(int(id))
+		return target == last
+	})
+	if target == "" {
+		return last
+	}
+	return target
 }
 
 // ---------- sway watch ----------
@@ -1149,8 +1178,7 @@ func (m *model) toggleFlag(fl string) {
 
 func (m *model) jump() {
 	if s, ok := m.cur(); ok {
-		switchView(s)
-		swayFocusMain()
+		swayFocusMain(switchView(s))
 		m.current = s.Pane
 		markRead(s.Pane) // jumping is reading — don't wait for the next poll
 		if m.rows[m.sel].St == done {
