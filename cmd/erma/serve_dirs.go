@@ -51,6 +51,7 @@ func defaultRecentDirsConfig() recentDirsConfig {
 // dirs: validateHomePath canonicalises them inside recentDirs so a session in
 // /var/x and a transcript in /private/var/x count together on macOS.
 func defaultLiveDirs() []string {
+	// GatherReadOnly errors are non-fatal; the badge degrades to 0.
 	rows, _ := session.GatherReadOnly(nil)
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {

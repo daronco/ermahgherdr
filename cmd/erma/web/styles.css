@@ -1397,6 +1397,11 @@ body.offline .strip-tool { color: var(--text-3); font-family: var(--sans); }
   vertical-align: 1px;
   flex: none;
 }
+/* On a selected row --raised against --accent-bg can wash out; swap to a
+   --surface chip with the accent color so the badge stays legible. */
+.recent-row.selected .open-badge {
+  background: var(--surface); color: var(--accent);
+}
 
 .other-dir-row {
   display: grid;

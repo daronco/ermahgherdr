@@ -432,6 +432,15 @@
   // True while a history entry for the open sheet is on the stack; closeSheet
   // pops it unless popstate is already the trigger.
   let sheetHistoryPushed = false;
+  // Count of programmatic history.back() calls whose popstate hasn't fired
+  // yet. A close-then-reopen within the same tick would otherwise let the
+  // deferred popstate close the just-reopened sheet; each pending back
+  // consumes one future popstate.
+  let pendingBacks = 0;
+  // Monotonic token for in-flight loadRecentDirs fetches. Each call takes a
+  // token; late-arriving results whose token is stale get dropped, so a
+  // close-then-reopen never appends an old fetch's rows on top of a new one.
+  let recentFetchSeq = 0;
 
   function basename(p) {
     if (!p) return '';
@@ -441,6 +450,9 @@
     return i < 0 ? trimmed : trimmed.slice(i + 1);
   }
 
+  // Callers today only pass paths inside $HOME, so the absolute-path branch
+  // collapses '/' and '/foo' both to '/' — fine for the recent-dirs list, but
+  // worth a second look if this helper is reused elsewhere.
   function parentPath(p) {
     if (!p) return '';
     const home = '~';
@@ -527,7 +539,8 @@
     newForm.hidden = true;
     if (sheetHistoryPushed && !fromPopstate) {
       sheetHistoryPushed = false;
-      try { history.back(); } catch (e) { /* ignore */ }
+      pendingBacks++;
+      try { history.back(); } catch (e) { pendingBacks--; }
     } else {
       sheetHistoryPushed = false;
     }
@@ -552,10 +565,13 @@
 
   async function loadRecentDirs() {
     recentListEl.innerHTML = '';
+    const seq = ++recentFetchSeq;
     try {
       const res = await fetch('/api/dirs/recent', { credentials: 'same-origin' });
+      if (seq !== recentFetchSeq) return;
       if (!res.ok) return;
       const body = await res.json();
+      if (seq !== recentFetchSeq) return;
       newSessionCsrf = res.headers.get('X-Erma-CSRF') || body.csrf || newSessionCsrf;
       const dirs = Array.isArray(body.dirs) ? body.dirs : [];
       recentEmptyEl.hidden = dirs.length > 0;
@@ -579,6 +595,7 @@
       if (!selected) selected = dirs[0].path;
       markSelected(selected);
     } catch (e) {
+      if (seq !== recentFetchSeq) return;
       console.warn('recent dirs', e);
     }
   }
@@ -684,6 +701,13 @@
     });
   }
   window.addEventListener('popstate', () => {
+    // Our own history.back() lands here; consume one pending back without
+    // treating it as a user navigation so a reopen-during-close keeps the
+    // newly-opened sheet intact.
+    if (pendingBacks > 0) {
+      pendingBacks--;
+      return;
+    }
     if (!sheetEl.hidden) closeSheet({ fromPopstate: true });
   });
   document.addEventListener('keydown', (ev) => {
