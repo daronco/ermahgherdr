@@ -24,7 +24,7 @@ import (
 // directory — the sheet renders it as an "N open" badge.
 type recentDir struct {
 	Path     string `json:"path"`
-	LastUsed int64  `json:"lastUsed"`      // unix seconds, transcript file mtime
+	LastUsed int64  `json:"lastUsed"` // unix seconds, transcript file mtime
 	Open     int    `json:"open,omitempty"`
 }
 
