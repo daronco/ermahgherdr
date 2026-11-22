@@ -62,23 +62,25 @@
   <section id="new-sheet" class="sheet" hidden aria-hidden="true">
     <div class="sheet-backdrop" data-close="1"></div>
     <div class="sheet-body" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <header class="sheet-head">
         <h2 id="sheet-title">New session</h2>
         <button class="sheet-close" data-close="1" aria-label="close">×</button>
       </header>
-      <p class="sheet-hint">Pick a recent directory or type an absolute path inside your home.</p>
+      <p class="sheet-subhead">Recent directories</p>
       <ul id="recent-list" class="recent-list"></ul>
       <p id="recent-empty" class="sheet-empty" hidden>No recent directories yet.</p>
-      <form id="new-form" class="new-form">
+      <button type="button" id="other-row" class="other-dir-row">
+        <span class="other-dir-plus" aria-hidden="true">＋</span>
+        <span class="other-dir-label">Other directory…</span>
+      </button>
+      <form id="new-form" class="new-form" hidden>
         <label for="new-dir" class="new-label">Directory</label>
         <input id="new-dir" class="new-input" type="text" inputmode="url" autocomplete="off"
-               placeholder="/home/you/code/project" required>
+               placeholder="/home/you/code/project">
         <p id="new-error" class="new-error" hidden></p>
-        <div class="new-actions">
-          <button type="button" class="btn" data-close="1">Cancel</button>
-          <button type="submit" class="btn btn-primary" id="new-submit">Open</button>
-        </div>
       </form>
+      <button type="button" id="new-primary" class="btn primary sheet-primary" disabled>Start Claude</button>
     </div>
   </section>
 
