@@ -26,6 +26,9 @@ type recentDir struct {
 	Path     string `json:"path"`
 	LastUsed int64  `json:"lastUsed"` // unix seconds, transcript file mtime
 	Open     int    `json:"open,omitempty"`
+	// Display is Path with $HOME as "~": the sheet shows "~/code", not the
+	// absolute path the POST still needs.
+	Display string `json:"display"`
 }
 
 // recentDirsConfig lets tests swap the cwd source, the path validator, and the
@@ -104,7 +107,7 @@ func recentDirs(cfg recentDirsConfig) []recentDir {
 			continue
 		}
 		seen[clean] = true
-		out = append(out, recentDir{Path: clean, LastUsed: r.MTime.Unix(), Open: openCounts[clean]})
+		out = append(out, recentDir{Path: clean, LastUsed: r.MTime.Unix(), Open: openCounts[clean], Display: homeAbbrev(clean)})
 		if cfg.limit > 0 && len(out) >= cfg.limit {
 			break
 		}

@@ -600,6 +600,16 @@
     }
   }
 
+  // Recent dirs span weeks, so coarser than fmtAge, as in png/03.png: 2m, 1h, 3d, 2w.
+  function fmtDirAge(sinceSec) {
+    if (!sinceSec) return '';
+    const d = Math.max(0, Math.floor(Date.now() / 1000) - sinceSec);
+    if (d < 3600) return Math.max(1, Math.floor(d / 60)) + 'm';
+    if (d < 86400) return Math.floor(d / 3600) + 'h';
+    if (d < 14 * 86400) return Math.floor(d / 86400) + 'd';
+    return Math.floor(d / (7 * 86400)) + 'w';
+  }
+
   function renderRecentRow(d) {
     const li = document.createElement('li');
     li.className = 'recent-row';
@@ -619,7 +629,8 @@
     nameRow.className = 'recent-name-row';
     const name = document.createElement('span');
     name.className = 'recent-name';
-    name.textContent = basename(d.path) || d.path;
+    const shown = d.display || d.path;
+    name.textContent = basename(shown) || shown;
     nameRow.appendChild(name);
     if (d.open && d.open > 0) {
       const badge = document.createElement('span');
@@ -629,13 +640,13 @@
     }
     const parent = document.createElement('span');
     parent.className = 'recent-parent';
-    parent.textContent = parentPath(d.path);
+    parent.textContent = parentPath(shown);
     body.appendChild(nameRow);
     body.appendChild(parent);
 
     const age = document.createElement('span');
     age.className = 'recent-age';
-    age.textContent = fmtAge(d.lastUsed);
+    age.textContent = fmtDirAge(d.lastUsed);
 
     li.appendChild(icon);
     li.appendChild(body);

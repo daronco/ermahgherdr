@@ -636,3 +636,32 @@ func TestParseServeFlagsNewSessionDir(t *testing.T) {
 		t.Errorf("flag = %q", sf.newSessionDir)
 	}
 }
+
+func TestRecentDirsDisplayAbbreviatesHome(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, "code", "acme-api")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	cfg := recentDirsConfig{
+		cwds: func() []session.TranscriptCwd {
+			return []session.TranscriptCwd{{Cwd: dir, MTime: time.Now()}}
+		},
+		validate: validateHomePath,
+		limit:    10,
+	}
+	dirs := recentDirs(cfg)
+	if len(dirs) != 1 {
+		t.Fatalf("rows: %+v", dirs)
+	}
+	if dirs[0].Path != dir {
+		t.Errorf("Path = %q, want %q (POST needs the absolute path)", dirs[0].Path, dir)
+	}
+	if dirs[0].Display != "~/code/acme-api" {
+		t.Errorf("Display = %q, want ~/code/acme-api", dirs[0].Display)
+	}
+}
