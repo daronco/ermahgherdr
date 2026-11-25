@@ -24,7 +24,8 @@
   const newForm = document.getElementById('new-form');
   const newDirInput = document.getElementById('new-dir');
   const newErrorEl = document.getElementById('new-error');
-  const newSubmitBtn = document.getElementById('new-submit');
+  const newPrimaryBtn = document.getElementById('new-primary');
+  const otherRowEl = document.getElementById('other-row');
 
   // Group containers, in render order. QUIET folds idle + paused.
   const GROUPS = [
@@ -423,6 +424,92 @@
   // ---------- New session sheet ----------
 
   let lastFocusBeforeSheet = null;
+  // Selected directory the primary button will launch. Empty = no selection
+  // (button stays disabled). When the Other row is active and the input is
+  // empty, selectedDir is '' and otherActive is true.
+  let selectedDir = '';
+  let otherActive = false;
+  // True while a history entry for the open sheet is on the stack; closeSheet
+  // pops it unless popstate is already the trigger.
+  let sheetHistoryPushed = false;
+  // Count of programmatic history.back() calls whose popstate hasn't fired
+  // yet. A close-then-reopen within the same tick would otherwise let the
+  // deferred popstate close the just-reopened sheet; each pending back
+  // consumes one future popstate.
+  let pendingBacks = 0;
+  // Monotonic token for in-flight loadRecentDirs fetches. Each call takes a
+  // token; late-arriving results whose token is stale get dropped, so a
+  // close-then-reopen never appends an old fetch's rows on top of a new one.
+  let recentFetchSeq = 0;
+
+  function basename(p) {
+    if (!p) return '';
+    const trimmed = p.replace(/\/+$/, '');
+    if (trimmed === '' || trimmed === '~') return trimmed || '~';
+    const i = trimmed.lastIndexOf('/');
+    return i < 0 ? trimmed : trimmed.slice(i + 1);
+  }
+
+  // Callers today only pass paths inside $HOME, so the absolute-path branch
+  // collapses '/' and '/foo' both to '/' — fine for the recent-dirs list, but
+  // worth a second look if this helper is reused elsewhere.
+  function parentPath(p) {
+    if (!p) return '';
+    const home = '~';
+    if (p === home) return home;
+    if (p.startsWith(home + '/')) {
+      const rest = p.slice(home.length + 1);
+      const i = rest.lastIndexOf('/');
+      return i < 0 ? home : home + '/' + rest.slice(0, i);
+    }
+    const trimmed = p.replace(/\/+$/, '');
+    const i = trimmed.lastIndexOf('/');
+    if (i <= 0) return '/';
+    return trimmed.slice(0, i);
+  }
+
+  function updatePrimary() {
+    const label = otherActive
+      ? basename((newDirInput.value || '').trim())
+      : basename(selectedDir);
+    newPrimaryBtn.textContent = label
+      ? 'Start Claude in ' + label
+      : 'Start Claude';
+    // Disable while nothing is selected, or while Other is active with an
+    // empty input (resolved open question in the spec).
+    const hasTarget = otherActive
+      ? !!(newDirInput.value || '').trim()
+      : !!selectedDir;
+    newPrimaryBtn.disabled = !hasTarget;
+  }
+
+  function markSelected(path) {
+    selectedDir = path || '';
+    otherActive = false;
+    newDirInput.value = '';
+    newForm.hidden = true;
+    newErrorEl.hidden = true;
+    for (const row of recentListEl.querySelectorAll('.recent-row')) {
+      row.classList.toggle('selected', row.dataset.path === selectedDir);
+      row.setAttribute('aria-pressed', row.dataset.path === selectedDir ? 'true' : 'false');
+    }
+    otherRowEl.classList.remove('selected');
+    updatePrimary();
+  }
+
+  function activateOther() {
+    otherActive = true;
+    selectedDir = '';
+    newForm.hidden = false;
+    newErrorEl.hidden = true;
+    for (const row of recentListEl.querySelectorAll('.recent-row')) {
+      row.classList.remove('selected');
+      row.setAttribute('aria-pressed', 'false');
+    }
+    otherRowEl.classList.add('selected');
+    updatePrimary();
+    requestAnimationFrame(() => newDirInput.focus());
+  }
 
   function openSheet() {
     lastFocusBeforeSheet = document.activeElement;
@@ -430,15 +517,33 @@
     sheetEl.setAttribute('aria-hidden', 'false');
     newErrorEl.hidden = true;
     newDirInput.value = '';
+    newForm.hidden = true;
+    selectedDir = '';
+    otherActive = false;
+    updatePrimary();
+    // Push a history entry so the browser Back button closes the sheet instead
+    // of leaving it dangling on a route that no longer makes sense.
+    if (!sheetHistoryPushed) {
+      try {
+        history.pushState({ ermaSheet: true }, '');
+        sheetHistoryPushed = true;
+      } catch (e) { /* history API unavailable: skip */ }
+    }
     loadRecentDirs();
-    // hidden=false applies synchronously; focus on the next frame once layout
-    // has settled, rather than an arbitrary setTimeout delay.
-    requestAnimationFrame(() => newDirInput.focus());
   }
 
-  function closeSheet() {
+  function closeSheet(opts) {
+    const fromPopstate = !!(opts && opts.fromPopstate);
     sheetEl.hidden = true;
     sheetEl.setAttribute('aria-hidden', 'true');
+    newForm.hidden = true;
+    if (sheetHistoryPushed && !fromPopstate) {
+      sheetHistoryPushed = false;
+      pendingBacks++;
+      try { history.back(); } catch (e) { pendingBacks--; }
+    } else {
+      sheetHistoryPushed = false;
+    }
     if (lastFocusBeforeSheet && typeof lastFocusBeforeSheet.focus === 'function') {
       lastFocusBeforeSheet.focus();
     }
@@ -460,37 +565,109 @@
 
   async function loadRecentDirs() {
     recentListEl.innerHTML = '';
+    const seq = ++recentFetchSeq;
     try {
       const res = await fetch('/api/dirs/recent', { credentials: 'same-origin' });
+      if (seq !== recentFetchSeq) return;
       if (!res.ok) return;
       const body = await res.json();
+      if (seq !== recentFetchSeq) return;
       newSessionCsrf = res.headers.get('X-Erma-CSRF') || body.csrf || newSessionCsrf;
-      // Start from the server's default directory; the user can still edit it.
-      if (!newDirInput.value && body.default) newDirInput.value = body.default;
       const dirs = Array.isArray(body.dirs) ? body.dirs : [];
       recentEmptyEl.hidden = dirs.length > 0;
       const frag = document.createDocumentFragment();
+      const defaultPath = body.default || '';
       for (const d of dirs) {
-        const li = document.createElement('li');
-        li.className = 'recent-row';
-        li.textContent = d.path;
-        // A tap on a list row is easy to land by accident: ask before launching.
-        li.addEventListener('click', () => {
-          newDirInput.value = d.path;
-          if (window.confirm('Start a new Claude session in ' + d.path + '?')) submitNewSession();
-        });
-        frag.appendChild(li);
+        frag.appendChild(renderRecentRow(d));
       }
       recentListEl.appendChild(frag);
+      // Zero recent rows: reveal the Other input straight away so the user can
+      // type a path without an extra tap.
+      if (dirs.length === 0) {
+        activateOther();
+        return;
+      }
+      // Default selection: the row matching body.default; otherwise the first.
+      let selected = '';
+      for (const d of dirs) {
+        if (defaultPath && d.path === defaultPath) { selected = d.path; break; }
+      }
+      if (!selected) selected = dirs[0].path;
+      markSelected(selected);
     } catch (e) {
+      if (seq !== recentFetchSeq) return;
       console.warn('recent dirs', e);
     }
   }
 
+  // Recent dirs span weeks, so coarser than fmtAge, as in png/03.png: 2m, 1h, 3d, 2w.
+  function fmtDirAge(sinceSec) {
+    if (!sinceSec) return '';
+    const d = Math.max(0, Math.floor(Date.now() / 1000) - sinceSec);
+    if (d < 3600) return Math.max(1, Math.floor(d / 60)) + 'm';
+    if (d < 86400) return Math.floor(d / 3600) + 'h';
+    if (d < 14 * 86400) return Math.floor(d / 86400) + 'd';
+    return Math.floor(d / (7 * 86400)) + 'w';
+  }
+
+  function renderRecentRow(d) {
+    const li = document.createElement('li');
+    li.className = 'recent-row';
+    li.setAttribute('role', 'button');
+    li.setAttribute('tabindex', '0');
+    li.setAttribute('aria-pressed', 'false');
+    li.dataset.path = d.path;
+
+    const icon = document.createElement('span');
+    icon.className = 'recent-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = '📁';
+
+    const body = document.createElement('span');
+    body.className = 'recent-body';
+    const nameRow = document.createElement('span');
+    nameRow.className = 'recent-name-row';
+    const name = document.createElement('span');
+    name.className = 'recent-name';
+    const shown = d.display || d.path;
+    name.textContent = basename(shown) || shown;
+    nameRow.appendChild(name);
+    if (d.open && d.open > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'open-badge';
+      badge.textContent = d.open + ' open';
+      nameRow.appendChild(badge);
+    }
+    const parent = document.createElement('span');
+    parent.className = 'recent-parent';
+    parent.textContent = parentPath(shown);
+    body.appendChild(nameRow);
+    body.appendChild(parent);
+
+    const age = document.createElement('span');
+    age.className = 'recent-age';
+    age.textContent = fmtDirAge(d.lastUsed);
+
+    li.appendChild(icon);
+    li.appendChild(body);
+    li.appendChild(age);
+
+    li.addEventListener('click', () => markSelected(d.path));
+    li.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        markSelected(d.path);
+      }
+    });
+    return li;
+  }
+
   async function submitNewSession() {
-    const dir = (newDirInput.value || '').trim();
+    const dir = otherActive
+      ? (newDirInput.value || '').trim()
+      : selectedDir;
     if (!dir) return;
-    newSubmitBtn.disabled = true;
+    newPrimaryBtn.disabled = true;
     newErrorEl.hidden = true;
     try {
       if (!newSessionCsrf) await loadRecentDirs();
@@ -511,22 +688,39 @@
       newErrorEl.hidden = false;
       newErrorEl.textContent = String(e && e.message || e);
     } finally {
-      newSubmitBtn.disabled = false;
+      updatePrimary();
     }
   }
 
   if (newBtn) newBtn.addEventListener('click', openSheet);
   if (emptyNewBtn) emptyNewBtn.addEventListener('click', openSheet);
-  if (newForm) newForm.addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    submitNewSession();
-  });
+  if (otherRowEl) otherRowEl.addEventListener('click', activateOther);
+  if (newDirInput) {
+    newDirInput.addEventListener('input', updatePrimary);
+    newDirInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        submitNewSession();
+      }
+    });
+  }
+  if (newPrimaryBtn) newPrimaryBtn.addEventListener('click', submitNewSession);
   if (sheetEl) {
     sheetEl.addEventListener('click', (ev) => {
       const t = ev.target;
       if (t && t.getAttribute && t.getAttribute('data-close') === '1') closeSheet();
     });
   }
+  window.addEventListener('popstate', () => {
+    // Our own history.back() lands here; consume one pending back without
+    // treating it as a user navigation so a reopen-during-close keeps the
+    // newly-opened sheet intact.
+    if (pendingBacks > 0) {
+      pendingBacks--;
+      return;
+    }
+    if (!sheetEl.hidden) closeSheet({ fromPopstate: true });
+  });
   document.addEventListener('keydown', (ev) => {
     if (sheetEl.hidden) return;
     if (ev.key === 'Escape') {

@@ -313,6 +313,81 @@ func TestRecentDirs(t *testing.T) {
 	if dirs[0].Path != b || dirs[1].Path != a || dirs[2].Path != c {
 		t.Errorf("order wrong: %+v", dirs)
 	}
+	for _, d := range dirs {
+		if d.Open != 0 {
+			t.Errorf("no live sessions configured; %+v has Open=%d", d, d.Open)
+		}
+	}
+}
+
+// The Open count is the number of live Claude panes whose pane_current_path
+// validates to the same canonical directory. A session with no cwd on the
+// live side counts for nothing; a recent-dir row with no live match carries
+// Open=0 (omitted from the JSON).
+func TestRecentDirsOpenCount(t *testing.T) {
+	home := t.TempDir()
+	a := filepath.Join(home, "a")
+	b := filepath.Join(home, "b")
+	c := filepath.Join(home, "c")
+	for _, d := range []string{a, b, c} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	now := time.Now()
+	cfg := recentDirsConfig{
+		cwds: func() []session.TranscriptCwd {
+			return []session.TranscriptCwd{
+				{Cwd: a, MTime: now},
+				{Cwd: b, MTime: now.Add(-time.Hour)},
+				{Cwd: c, MTime: now.Add(-2 * time.Hour)},
+			}
+		},
+		validate: validateHomePath,
+		liveDirs: func() []string {
+			// Two live panes in a (stack, badge shows "2 open"), one in b, none
+			// in c. Trailing slash on b exercises validateHomePath's cleanup
+			// so b still joins; an empty entry is ignored.
+			return []string{a, a, b + "/", ""}
+		},
+		limit: 10,
+	}
+	dirs := recentDirs(cfg)
+	if len(dirs) != 3 {
+		t.Fatalf("rows: %+v", dirs)
+	}
+	byPath := map[string]int{}
+	for _, d := range dirs {
+		byPath[d.Path] = d.Open
+	}
+	if byPath[a] != 2 {
+		t.Errorf("a: Open = %d, want 2", byPath[a])
+	}
+	if byPath[b] != 1 {
+		t.Errorf("b: Open = %d, want 1", byPath[b])
+	}
+	if byPath[c] != 0 {
+		t.Errorf("c: Open = %d, want 0", byPath[c])
+	}
+}
+
+// The JSON serialisation uses `omitempty` on Open: a recent dir with no live
+// matches must not leak an "open":0 key, which the client treats as "no badge".
+func TestRecentDirsOpenOmitEmpty(t *testing.T) {
+	d := recentDir{Path: "/x", LastUsed: 1}
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"open"`) {
+		t.Errorf("Open=0 leaked into %s", raw)
+	}
+	d.Open = 3
+	raw, _ = json.Marshal(d)
+	if !strings.Contains(string(raw), `"open":3`) {
+		t.Errorf("Open=3 missing from %s", raw)
+	}
 }
 
 // A session that ended — its ~/.claude/sessions/<pid>.json is gone, as
@@ -559,5 +634,34 @@ func TestParseServeFlagsNewSessionDir(t *testing.T) {
 	}
 	if sf, _ := parseServeFlags([]string{"--new-session-dir", "~/flag"}, nil); sf.newSessionDir != "~/flag" {
 		t.Errorf("flag = %q", sf.newSessionDir)
+	}
+}
+
+func TestRecentDirsDisplayAbbreviatesHome(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, "code", "acme-api")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	cfg := recentDirsConfig{
+		cwds: func() []session.TranscriptCwd {
+			return []session.TranscriptCwd{{Cwd: dir, MTime: time.Now()}}
+		},
+		validate: validateHomePath,
+		limit:    10,
+	}
+	dirs := recentDirs(cfg)
+	if len(dirs) != 1 {
+		t.Fatalf("rows: %+v", dirs)
+	}
+	if dirs[0].Path != dir {
+		t.Errorf("Path = %q, want %q (POST needs the absolute path)", dirs[0].Path, dir)
+	}
+	if dirs[0].Display != "~/code/acme-api" {
+		t.Errorf("Display = %q, want ~/code/acme-api", dirs[0].Display)
 	}
 }
