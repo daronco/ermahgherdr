@@ -148,7 +148,7 @@ func TestListTopMatchesRender(t *testing.T) {
 					break
 				}
 			}
-			want := m.listTop()
+			want := m.listTop() + m.leadN(0) // the band's heading comes first
 			if !m.comp {
 				want++ // a full-size item block opens with a padding row
 			}
@@ -430,8 +430,8 @@ func TestCtxMeterWidth(t *testing.T) {
 	}
 }
 
-// From the far end: unmarked, priority, paused against the counters; inside a
-// band, tmux order holds.
+// Bottom-up: priority first (pinned under the Dai), then unmarked, then paused
+// against the counters; inside a band, tmux order holds.
 func TestArrange(t *testing.T) {
 	names := func(rows []sess) string {
 		var out []string
@@ -448,7 +448,7 @@ func TestArrange(t *testing.T) {
 	}
 	rows := mk()
 	arrange(rows, false)
-	if got := names(rows); got != "b d a e c f" {
+	if got := names(rows); got != "a e b d c f" {
 		t.Errorf("bottom-up: %q", got)
 	}
 	rows = mk()
@@ -505,10 +505,10 @@ func TestHitTestMatchesBands(t *testing.T) {
 }
 
 func TestBandHeadFits(t *testing.T) {
-	rows := []sess{{Flag: "paused"}, {Flag: "prio"}}
+	rows := []sess{{Flag: "paused"}, {Flag: "prio"}, {}}
 	for _, w := range []int{14, 27, 40} {
 		m := model{w: w, rows: rows}
-		for _, fl := range []string{"paused", "prio"} {
+		for _, fl := range []string{"paused", "prio", ""} {
 			if got := lipgloss.Width(m.bandHead(fl, themeFor(false))); got > m.rowW() {
 				t.Errorf("w=%d %s: heading is %d wide, rowW is %d", w, fl, got, m.rowW())
 			}
@@ -597,6 +597,42 @@ func TestPinnedViewAnyHeight(t *testing.T) {
 		m.recomputeDensity()
 		if got := len(strings.Split(m.View(), "\n")); h > 0 && got > h+2 {
 			t.Errorf("h=%d: view has %d lines", h, got)
+		}
+	}
+}
+
+// Bottom-up, the priority band is pinned under the Dai at the top, and the
+// unmarked and paused rows stay against the counters, a stretch of empty panel
+// between the two blocks. Without a Dai session the band is pinned alone.
+func TestPrioPinnedOnTop(t *testing.T) {
+	base := []sess{
+		{Pane: "%1", Name: "plainmark", St: idle, W: 1},
+		{Pane: "%2", Name: "priomark", St: proc, W: 2, Flag: "prio"},
+		{Pane: "%3", Name: "pausedmark", St: idle, W: 3, Flag: "paused"},
+	}
+	for _, dai := range []bool{true, false} {
+		rows := append([]sess(nil), base...)
+		if dai {
+			rows = append(rows, sess{Pane: "%9", Name: "daimark", St: idle, W: 9, Dai: true})
+		}
+		arrange(rows, false)
+		m := model{w: 28, h: 70, rows: rows}
+		m.recomputeDensity()
+		lines := strings.Split(m.View(), "\n")
+		at := func(name string) int {
+			for i, ln := range lines {
+				if strings.Contains(ln, name) {
+					return i
+				}
+			}
+			return -1
+		}
+		prio, plain := at("priomark"), at("plainmark")
+		if prio < 0 || plain < 0 || prio > m.pinTop()+m.pinH() || plain < prio+10 {
+			t.Errorf("dai=%v: priority at %d (pin ends %d), plain at %d", dai, prio, m.pinTop()+m.pinH(), plain)
+		}
+		if dai && at("daimark") > prio {
+			t.Errorf("priority drawn above the Dai")
 		}
 	}
 }

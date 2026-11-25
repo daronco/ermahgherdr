@@ -62,7 +62,7 @@ func TestArrangeSmoke(t *testing.T) {
 	for _, r := range rows {
 		names = append(names, r.Name)
 	}
-	if got := strings.Join(names, " "); got != "dai b a c" {
+	if got := strings.Join(names, " "); got != "dai a b c" {
 		t.Errorf("order bottom-up: %q", got)
 	}
 }

@@ -604,10 +604,13 @@ func BandOf(fl string) int {
 	return 0
 }
 
-// Arrange orders rows by band and keeps tmux order inside each. The far end is
-// the top of the screen bottom-up, and the bottom with --top. The Dai session
+// Arrange orders rows by band and keeps tmux order inside each. The Dai session
 // comes before every band: the first row is the top of the list in both layouts.
+// Bottom-up, the priority band follows it, pinned with it at the top of the
+// panel, and the unmarked and paused rows stay against the counters. With --top
+// the bands run paused, priority, unmarked away from the counters.
 func Arrange(rows []Session, top bool) {
+	bottomUp := [...]int{1, 0, 2} // by BandOf: unmarked, priority, paused
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].Dai != rows[j].Dai {
 			return rows[i].Dai
@@ -616,7 +619,7 @@ func Arrange(rows []Session, top bool) {
 		if top {
 			return a > b
 		}
-		return a < b
+		return bottomUp[a] < bottomUp[b]
 	})
 }
 

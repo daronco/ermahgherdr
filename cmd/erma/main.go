@@ -19,9 +19,10 @@
 // cyan means only "you": selection band ▐, current-session arrow ▸, focused count.
 //
 // Two marks, set from the right-click menu, move a session instead of coloring
-// it: paused (‖) folds it to one dim line by the counters, priority (★) puts it
-// in the band just past those. They live per Claude session, so they outlive the
-// pane.
+// it: paused (‖) folds it to one dim line by the counters, priority (★) pins it
+// at the top under the Dai session. They live per Claude session, so they
+// outlive the pane. An unmarked session keeps its hues, faded, so the priority
+// band is the loud one.
 package main
 
 import (
@@ -1232,12 +1233,22 @@ func (m model) itemHeight(it sess, comp bool) int {
 	return h
 }
 
-// pinned: bottom-up, the Dai session (arrange puts it first) is not part of the
-// list at all: it is drawn on the top rows of the panel, between two rules,
-// where the list growing from the bottom never reaches it.
-func (m model) pinned() bool {
-	return !m.top && len(m.rows) > 0 && m.rows[0].Dai
+// pinN: bottom-up, the Dai session and the priority band (arrange puts them
+// first) are not part of the list at all: they are drawn on the top rows of the
+// panel, between two rules, where the list growing from the bottom never
+// reaches them.
+func (m model) pinN() int {
+	if m.top {
+		return 0
+	}
+	n := 0
+	for n < len(m.rows) && (m.rows[n].Dai || m.rows[n].Flag == "prio") {
+		n++
+	}
+	return n
 }
+
+func (m model) pinned() bool { return m.pinN() > 0 }
 
 // mascotLit: with a Dai session up, the mascot is the Dai -- lit while its pane
 // is the one in front of you. Without one, the bar's own focus lights it.
@@ -1378,21 +1389,27 @@ func (m model) pinTop() int {
 	return m.mascotH()
 }
 
-// pinH: the rows the pinned block takes, its two rules included.
-func (m model) pinH() int {
-	if !m.pinned() {
-		return 0
+// pinExtra: the rows a pinned item takes besides its own. The Dai sits between
+// two rules that mark it off; the priority band under it has its gap and heading.
+func (m model) pinExtra(i int) (above, below int) {
+	if m.rows[i].Dai {
+		return 1, 1
 	}
-	return m.itemHeight(m.rows[0], m.comp) + 2
+	return m.leadN(i), 0
+}
+
+// pinH: the rows the pinned block takes.
+func (m model) pinH() int {
+	h := 0
+	for i := 0; i < m.pinN(); i++ {
+		a, b := m.pinExtra(i)
+		h += a + m.itemHeight(m.rows[i], m.comp) + b
+	}
+	return h
 }
 
 // listStart: the first row index drawn in the list proper.
-func (m model) listStart() int {
-	if m.pinned() {
-		return 1
-	}
-	return 0
-}
+func (m model) listStart() int { return m.pinN() }
 
 // listTop: the screen row the first item is drawn on. Bottom-up, the list is
 // pinned above the footer chrome, so where it starts depends on how tall it is.
@@ -1408,20 +1425,33 @@ func (m model) listTop() int {
 }
 
 // lead: what is drawn above item i that belongs to no session — a blank where
-// one band ends and the next begins, and a heading over each marked band.
+// one band ends and the next begins, and a heading over each band.
 func (m model) lead(i int) (gap, head bool) {
 	it := m.rows[i]
 	if it.Dai { // its own band of one, under its own rules
 		return false, false
 	}
-	first := i == m.listStart() // the pinned block has its own rule above the list
+	first := i == 0 || i == m.listStart() // each block has its own rule above it
 	prev := sess{}
 	if i > 0 {
 		prev = m.rows[i-1]
 	}
 	gap = !first && (prev.Dai || bandOf(prev.Flag) != bandOf(it.Flag))
-	head = it.Flag != "" && (first || prev.Dai || prev.Flag != it.Flag)
+	head = first || prev.Dai || prev.Flag != it.Flag
 	return gap, head
+}
+
+// blockLines: item i as drawn, with the gap and heading that lead into it.
+func (m model) blockLines(i int, th theme) []string {
+	var out []string
+	gap, head := m.lead(i)
+	if gap {
+		out = append(out, "")
+	}
+	if head {
+		out = append(out, m.bandHead(m.rows[i].Flag, th))
+	}
+	return append(out, strings.Split(m.itemLines(m.rows[i], i, th), "\n")...)
 }
 
 func (m model) leadN(i int) int {
@@ -1447,10 +1477,17 @@ func (m model) soundRow() int {
 }
 
 func (m model) hitTest(y int) int {
-	if top := m.pinTop() + 1; m.pinned() && y >= top && y < top+m.itemHeight(m.rows[0], m.comp) {
-		return 0 // under the pin's top rule
+	row := m.pinTop()
+	for i := 0; i < m.pinN(); i++ {
+		a, b := m.pinExtra(i)
+		row += a
+		hh := m.itemHeight(m.rows[i], m.comp)
+		if y >= row && y < row+hh {
+			return i
+		}
+		row += hh + b
 	}
-	row := m.listTop()
+	row = m.listTop()
 	for i := m.listStart(); i < len(m.rows); i++ {
 		row += m.leadN(i)
 		hh := m.itemHeight(m.rows[i], m.comp)
@@ -1464,8 +1501,14 @@ func (m model) hitTest(y int) int {
 
 // itemTop: the screen row item i's block starts on.
 func (m model) itemTop(i int) int {
-	if i == 0 && m.pinned() {
-		return m.pinTop() + 1 // under the pin's top rule
+	if i < m.pinN() {
+		row := m.pinTop()
+		for j := 0; j < i; j++ {
+			a, b := m.pinExtra(j)
+			row += a + m.itemHeight(m.rows[j], m.comp) + b
+		}
+		a, _ := m.pinExtra(i)
+		return row + a
 	}
 	row := m.listTop()
 	for j := m.listStart(); j < i; j++ {
@@ -1735,6 +1778,26 @@ func ctxShade(rbg lipgloss.Color, step int) lipgloss.Color {
 		min(r+step, 0xff), min(g+step, 0xff), min(b+step, 0xff)))
 }
 
+// mix: pct% of the way from a to b. A colour that is not #rrggbb stays a.
+func mix(a, b lipgloss.Color, pct int) lipgloss.Color {
+	var r1, g1, b1, r2, g2, b2 int
+	if _, err := fmt.Sscanf(string(a), "#%02x%02x%02x", &r1, &g1, &b1); err != nil {
+		return a
+	}
+	if _, err := fmt.Sscanf(string(b), "#%02x%02x%02x", &r2, &g2, &b2); err != nil {
+		return a
+	}
+	ch := func(x, y int) int { return x + (y-x)*pct/100 }
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", ch(r1, r2), ch(g1, g2), ch(b1, b2)))
+}
+
+// An unmarked row keeps its hues but sinks toward the panel, so the priority
+// band above is the loud one: two blocks equally loud read as one.
+const (
+	quietFg = 45 // text, glyphs and marks
+	quietBg = 60 // row tints and the badge
+)
+
 func ctxColor(used int, th theme) lipgloss.Color {
 	switch {
 	case used >= ctxUsedHigh:
@@ -1813,9 +1876,16 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 	if hov { // the pointer is on it: a click jumps here
 		rbg = ctxShade(rbg, 0x06)
 	}
+	quiet := it.Flag == "" && !it.Dai
+	if quiet {
+		rbg = mix(rbg, th.panel, quietBg)
+	}
 	nc, bold := nameColor(it, sel, th)
 	// every cell bakes the row bg, so there are no reset "holes" in the fill.
 	c := func(f lipgloss.Color, s string, b bool) string {
+		if quiet {
+			f = mix(f, th.panel, quietFg)
+		}
 		return lipgloss.NewStyle().Foreground(f).Background(rbg).Bold(b).Render(s)
 	}
 	sp, spc := m.spineRune(it.St)
@@ -1918,6 +1988,9 @@ func (m model) renderItem(it sess, idx int, th theme) string {
 	if sel { // selected = cyan (the "you" color)
 		bbg = th.focus
 	}
+	if quiet {
+		bbg = mix(bbg, th.panel, quietBg)
+	}
 	badge := lipgloss.NewStyle().Background(bbg).Foreground(badgeFg).Render(bstr)
 	leadN := 4 - bw // right-align badge; +1 margin -> 5-col slot
 	if leadN < 0 {
@@ -2002,18 +2075,23 @@ func (m model) legend() string {
 	return ""
 }
 
-// bandHead: the heading over a marked band — its glyph, its name and how many,
-// then the thin rule out to the edge.
+// bandHead: the heading over a band — its glyph, its name and how many, then the
+// thin rule out to the edge. The unmarked band is "open": neither a priority nor
+// set aside, and as faded as its rows.
 func (m model) bandHead(fl string, th theme) string {
 	n := 0
 	for _, r := range m.rows {
-		if r.Flag == fl {
+		if r.Flag == fl && !r.Dai {
 			n++
 		}
 	}
-	icon, ic, label, lc := "‖", cPaused, "paused", cPaused
-	if fl == "prio" {
+	quiet := mix(th.calm, th.panel, quietFg)
+	icon, ic, label, lc := "◦", quiet, "open", quiet
+	switch fl {
+	case "prio":
 		icon, ic, label, lc = "★", th.white, "prio", th.calm
+	case "paused":
+		icon, ic, label, lc = "‖", cPaused, "paused", cPaused
 	}
 	txt := fmt.Sprintf("%s · %d", label, n)
 	if utf8.RuneCountInString(txt)+4 > m.rowW() {
@@ -2135,22 +2213,18 @@ func (m model) View() string {
 	head, rule := m.header()
 
 	var pin, list []string
-	if m.pinned() {
-		pin = append(append([]string{rule}, strings.Split(m.itemLines(m.rows[0], 0, th), "\n")...), rule)
+	for idx := 0; idx < m.pinN(); idx++ {
+		if m.rows[idx].Dai {
+			pin = append(append(append(pin, rule), strings.Split(m.itemLines(m.rows[idx], idx, th), "\n")...), rule)
+		} else {
+			pin = append(pin, m.blockLines(idx, th)...)
+		}
 	}
 	if len(m.rows) == 0 {
 		list = []string{" " + fg(th.meta, "no claude"), " " + fg(th.meta, "sessions")}
 	} else {
 		for idx := m.listStart(); idx < len(m.rows); idx++ {
-			it := m.rows[idx]
-			gap, head := m.lead(idx)
-			if gap {
-				list = append(list, "")
-			}
-			if head {
-				list = append(list, m.bandHead(it.Flag, th))
-			}
-			list = append(list, strings.Split(m.itemLines(it, idx, th), "\n")...)
+			list = append(list, m.blockLines(idx, th)...)
 		}
 	}
 	// The foot: everything that is not a session, in one block against the edge
