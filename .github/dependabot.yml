@@ -9,3 +9,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # init/autobuild/analyze must share one version or CodeQL fails;
+      # separate PRs can never pass CI on their own.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
